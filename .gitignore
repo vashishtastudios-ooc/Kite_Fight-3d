@@ -1,0 +1,16 @@
+# Godot 4
+.godot/
+*.translation
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local captures
+debug_preview.png
+debug_preview.png.import
+shot_lit.png
+shot_lit.png.import
+shot_lit2.png
+shot_lit2.png.import

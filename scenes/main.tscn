@@ -1,0 +1,64 @@
+[gd_scene load_steps=10 format=3 uid="uid://bq8kiteflymain"]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/wind_system.gd" id="2_wind"]
+[ext_resource type="Script" path="res://scripts/city_generator.gd" id="3_city"]
+[ext_resource type="Script" path="res://scripts/player.gd" id="4_player"]
+[ext_resource type="Script" path="res://scripts/kite.gd" id="5_kite"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="6_hud"]
+[ext_resource type="Script" path="res://scripts/pech.gd" id="7_pech"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
+radius = 0.38
+height = 1.72
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.615661, -0.391605, 0.683013, 0, 0.867666, 0.497109, -0.788011, -0.306013, 0.534165, 0, 40, 0)
+light_color = Color(1, 0.91, 0.75, 1)
+light_energy = 1.38
+shadow_enabled = true
+shadow_blur = 1.4
+directional_shadow_max_distance = 420.0
+
+[node name="WindSystem" type="Node" parent="."]
+script = ExtResource("2_wind")
+
+[node name="City" type="Node3D" parent="."]
+script = ExtResource("3_city")
+
+[node name="Player" type="CharacterBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 20.3, 91.4)
+script = ExtResource("4_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.86, 0)
+shape = SubResource("CapsuleShape3D_player")
+
+[node name="Head" type="Node3D" parent="Player"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.58, 0)
+
+[node name="Camera3D" type="Camera3D" parent="Player/Head"]
+fov = 68.0
+near = 0.08
+far = 1800.0
+current = true
+
+[node name="Handle" type="Node3D" parent="Player/Head"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.05, -0.12, -0.40)
+
+[node name="Kite" type="Node3D" parent="."]
+script = ExtResource("5_kite")
+
+[node name="RivalKite" type="Node3D" parent="."]
+script = ExtResource("5_kite")
+
+[node name="Pech" type="Node3D" parent="."]
+script = ExtResource("7_pech")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+script = ExtResource("6_hud")
