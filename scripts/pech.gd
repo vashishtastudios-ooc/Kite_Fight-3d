@@ -1,7 +1,6 @@
 extends Node
 
-## When two manjhas get close, they saw. A taut kheench cuts.
-## Dheel sags the line to slip out of the pech — it does not grind.
+## Cut dash vs manjha. Pink Q crosses their string. E sag can slip if you leave the cross.
 
 signal pech_changed(active: bool)
 signal kaata(player_won: bool, at: Vector3)
@@ -11,10 +10,13 @@ const KiteSc := preload("res://scripts/kite.gd")
 var active: bool = false
 var contact_pos: Vector3 = Vector3.ZERO
 var pech_time: float = 0.0
+var player_wins: int = 0
+var rival_wins: int = 0
 
 var _spark: MeshInstance3D
 var _spark_mat: StandardMaterial3D
 var _gap: float = 99.0
+var _lock: bool = false
 
 
 func _ready() -> void:
@@ -38,28 +40,37 @@ func tick(delta: float, player: KiteSc, rival: KiteSc) -> void:
 		_set_active(false)
 		return
 	if not player.is_airborne() or not rival.is_airborne():
+		_lock = false
 		_set_active(false)
 		return
 	if player.phase == KiteSc.Phase.CUT or rival.phase == KiteSc.Phase.CUT:
 		_set_active(false)
 		return
+	if not player.is_dashing() and not rival.is_dashing():
+		_lock = false
 
 	var pts := _closest_segment_points(player.hand_pos, player.global_position, rival.hand_pos, rival.global_position)
 	_gap = pts["dist"]
 	contact_pos = pts["mid"]
+	var crossed := _is_cross(pts)
 
-	if _gap < 2.15:
+	if _gap < 2.4:
 		var was := active
 		_set_active(true)
 		pech_time += delta
 		_spark.visible = true
 		_spark.global_position = contact_pos
 		var pulse := 0.45 + 0.55 * absf(sin(Time.get_ticks_msec() * 0.02))
-		_spark_mat.albedo_color = Color(1.0, 0.82, 0.28, pulse)
+		var hot := player.is_dashing() or rival.is_dashing()
+		_spark_mat.albedo_color = Color(1.0, 0.35, 0.62, pulse) if hot else Color(1.0, 0.82, 0.28, pulse)
 		_spark.scale = Vector3.ONE * (0.7 + pulse * 0.8)
 		if not was:
 			pech_changed.emit(true)
-		_saw(delta, player, rival)
+		if not _lock:
+			if player.is_dashing():
+				_resolve_dash(true, player, rival, pts, crossed)
+			elif rival.is_dashing():
+				_resolve_dash(false, rival, player, pts, crossed)
 	else:
 		pech_time = maxf(0.0, pech_time - delta * 1.6)
 		_spark.visible = false
@@ -68,35 +79,38 @@ func tick(delta: float, player: KiteSc, rival: KiteSc) -> void:
 			pech_changed.emit(false)
 
 
-func _saw(delta: float, player: KiteSc, rival: KiteSc) -> void:
-	if pech_time < 0.28:
+func _resolve_dash(player_swings: bool, attacker: KiteSc, defender: KiteSc, pts: Dictionary, crossed: bool) -> void:
+	if not crossed and pts["dist"] > 1.45:
 		return
-	## Taut fly/spin grinds. Dheel is an escape: almost no cut dealt, hard to bite.
-	var p_taut := player.phase == KiteSc.Phase.FLY or player.phase == KiteSc.Phase.SPIN
-	var r_taut := rival.phase == KiteSc.Phase.FLY or rival.phase == KiteSc.Phase.SPIN
-	var p_sag := player.phase == KiteSc.Phase.DHEEL or player.slack > 0.55
-	var r_sag := rival.phase == KiteSc.Phase.DHEEL or rival.slack > 0.55
-	var p_slide := 0.16 if p_taut else 0.05
-	var r_slide := 0.14 if r_taut else 0.05
-	if p_sag:
-		p_slide *= 0.08
-		r_slide *= 0.28
-	if r_sag:
-		r_slide *= 0.08
-		p_slide *= 0.28
-	var p_cut := p_slide * delta * 0.40
-	var r_cut := r_slide * delta * 0.36
-	var closeness := 1.0 - clampf(_gap / 2.15, 0.0, 1.0)
-	p_cut *= 0.55 + closeness * 0.9
-	r_cut *= 0.55 + closeness * 0.9
-	var rival_before := rival.manjha
-	var player_before := player.manjha
-	rival.damage_manjha(p_cut)
-	player.damage_manjha(r_cut)
-	if rival_before > 0.0 and rival.manjha <= 0.0:
-		kaata.emit(true, contact_pos)
-	elif player_before > 0.0 and player.manjha <= 0.0:
-		kaata.emit(false, contact_pos)
+	var ta: float = pts["ta"]
+	var tb: float = pts["tb"]
+	if ta < 0.12 or ta > 0.90 or tb < 0.12 or tb > 0.90:
+		return
+	## Slack and already off the line = slip. Slack still on the string = cut.
+	if defender.is_slack_for_cut() and pts["dist"] > 1.05:
+		return
+	_lock = true
+	defender.apply_cut()
+	if player_swings:
+		player_wins += 1
+	else:
+		rival_wins += 1
+	kaata.emit(player_swings, pts["mid"])
+
+
+func _is_cross(pts: Dictionary) -> bool:
+	if pts["dist"] > 1.55:
+		return false
+	var pa: Vector3 = pts["pa"]
+	var pb: Vector3 = pts["pb"]
+	var a: Vector3 = pts["a"]
+	var b: Vector3 = pts["b"]
+	if a.length_squared() < 0.01 or b.length_squared() < 0.01:
+		return false
+	var ang := rad_to_deg(a.normalized().angle_to(b.normalized()))
+	if ang < 22.0:
+		return false
+	return pa.distance_to(pb) <= 1.55
 
 
 func _set_active(v: bool) -> void:
@@ -123,4 +137,13 @@ func _closest_segment_points(a0: Vector3, a1: Vector3, b0: Vector3, b1: Vector3)
 	ta = clampf((ab * tb - ra) / maxf(aa, 0.0001), 0.0, 1.0)
 	var pa := a0 + a * ta
 	var pb := b0 + b * tb
-	return {"dist": pa.distance_to(pb), "mid": (pa + pb) * 0.5, "pa": pa, "pb": pb}
+	return {
+		"dist": pa.distance_to(pb),
+		"mid": (pa + pb) * 0.5,
+		"pa": pa,
+		"pb": pb,
+		"ta": ta,
+		"tb": tb,
+		"a": a,
+		"b": b,
+	}

@@ -5,6 +5,8 @@ const HIT_R := 3.4
 const FW_SHADER := preload("res://shaders/firework_burst.gdshader")
 const FLARE_SHADER := preload("res://shaders/rocket_flare.gdshader")
 
+signal resolved(hit: bool, dodged: bool)
+
 var launch_pos: Vector3
 var _target: Vector3
 var _from: Vector3
@@ -84,9 +86,17 @@ func _process(delta: float) -> void:
 
 func _arrive() -> void:
 	var at := _target
+	var hit := false
+	var dodged := false
 	if _kite and is_instance_valid(_kite) and _kite.has_method("is_airborne") and _kite.is_airborne():
 		if _kite.global_position.distance_to(at) < HIT_R:
+			hit = true
 			_kite.kill_by_rocket()
+		else:
+			var kp: Vector3 = _kite.global_position
+			var moved: bool = kp.distance_to(at) > 5.8
+			dodged = moved and _kite.has_method("steered_recently") and _kite.steered_recently()
+	resolved.emit(hit, dodged)
 	_explode(at, _festive_color())
 
 

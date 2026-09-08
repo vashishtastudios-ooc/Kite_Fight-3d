@@ -3,6 +3,9 @@ extends CharacterBody3D
 
 const WALK_SPEED := 3.4
 const SPRINT_SPEED := 5.2
+const BODY := preload("res://assets/people/stylized+boy+3d+model (1).glb")
+const HEIGHT := 1.62
+const CAM_BOOM := Vector3(0.42, 1.82, 2.65)
 
 var look_yaw: float = 0.0
 var look_pitch: float = -0.08
@@ -17,26 +20,72 @@ var rooftop_y: float = 20.3
 var _bob_t: float = 0.0
 var _fov_kick: float = 0.0
 var _spool_w: float = 0.0
-const BASE_FOV := 68.0
+var _anim: AnimationPlayer
+var _idle: StringName = &""
+var _walk: StringName = &""
+var _yank: StringName = &""
+var _line_anim: bool = false
+const BASE_FOV := 62.0
+const CLOSE_FOV := 5.5
 
 
 func _ready() -> void:
 	floor_snap_length = 0.4
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func capture_mouse() -> void:
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
-func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed:
-		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-			capture_mouse()
+func setup_avatar() -> void:
+	var model := BODY.instantiate() as Node3D
+	if model == null:
+		push_warning("Missing player body GLB")
+		return
+	model.name = "Body"
+	add_child(model)
+	_hide_slab(model)
+	model.rotation.y = PI
+	model.force_update_transform()
+	var aabb := _world_aabb(model)
+	var h := aabb.size.y
+	if h < 0.2:
+		h = HEIGHT
+	model.scale *= HEIGHT / h
+	model.force_update_transform()
+	aabb = _world_aabb(model)
+	model.global_position.y += global_position.y - aabb.position.y
+	model.force_update_transform()
+	var skel := _find_skel(model)
+	_anim = _find_anim(model)
+	_bind_clips()
+	if _anim:
+		if not _anim.animation_finished.is_connected(_on_anim_finished):
+			_anim.animation_finished.connect(_on_anim_finished)
+	if skel and handle:
+		var hold := BoneAttachment3D.new()
+		hold.name = "CharkhiHold"
+		hold.bone_name = "R_Hand"
+		skel.add_child(hold)
+		handle.reparent(hold)
+		handle.position = Vector3(0.02, 0.04, 0.06)
+		handle.rotation_degrees = Vector3(0.0, 90.0, 80.0)
+	if camera:
+		camera.far = 2400.0
+	if head:
+		head.position = CAM_BOOM
+		head.rotation = Vector3(look_pitch, 0.0, 0.0)
+	_play_clip(_idle)
 
 
-func tick(delta: float, tension: float, pull: float, _slack: float, bias: float, payout: float = 0.0) -> void:
-	head.rotation.x = look_pitch
+func tick(delta: float, _tension: float, _pull: float, _slack: float, _bias: float, payout: float = 0.0, zoom: float = 0.0, kheench_held: bool = false, dheel_held: bool = false) -> void:
 	rotation.y = look_yaw
+	if head:
+		head.position = CAM_BOOM
+		head.rotation.x = look_pitch
+		head.rotation.y = 0.0
+		head.rotation.z = 0.0
 
 	var input := Vector2(
 		Input.get_action_strength("walk_right") - Input.get_action_strength("walk_left"),
@@ -54,6 +103,7 @@ func tick(delta: float, tension: float, pull: float, _slack: float, bias: float,
 	else:
 		velocity.y = 0.0
 	move_and_slide()
+	_update_locomotion(wish.length() > 0.12, speed)
 
 	global_position.x = clampf(global_position.x, rooftop_bounds.position.x, rooftop_bounds.end.x)
 	global_position.z = clampf(global_position.z, rooftop_bounds.position.y, rooftop_bounds.end.y)
@@ -64,24 +114,38 @@ func tick(delta: float, tension: float, pull: float, _slack: float, bias: float,
 	var bob := sin(_bob_t * 8.0) * wish.length() * 0.025
 	camera.position.y = bob
 	_fov_kick = move_toward(_fov_kick, 0.0, delta * 9.0)
-	camera.fov = BASE_FOV + _fov_kick
+	var z := clampf(zoom, 0.0, 1.0)
+	## Ease the last stretch of the bar so the kite fills the frame.
+	z = z * z * (3.0 - 2.0 * z)
+	camera.fov = lerpf(BASE_FOV, CLOSE_FOV, z) + _fov_kick * (1.0 - z * 0.92)
 	if handle:
-		handle.rotation.z = lerp_angle(handle.rotation.z, -bias * 0.12, 8.0 * delta)
-		handle.rotation.x = lerp_angle(handle.rotation.x, pull * 0.42 + clampf(tension / 70.0, 0.0, 0.22), 10.0 * delta)
-		handle.position.x = 0.05
-		handle.position.z = lerpf(-0.40, -0.34, pull)
-		handle.position.y = lerpf(-0.12, -0.16, pull)
 		var firki := handle.get_node_or_null("Firki")
 		if firki:
-			## ω ≈ line speed / spool radius, then clamped so it reads in first person.
-			var target := clampf(payout / 0.62, -24.0, 24.0)
-			var accel := 52.0 if absf(target) > absf(_spool_w) else 18.0
+			## Q winds in (negative). E pays out (positive). Opposite spins.
+			var target := 0.0
+			if kheench_held:
+				target = -18.0
+			elif dheel_held:
+				target = 20.0
+			else:
+				target = clampf(payout / 0.45, -24.0, 24.0)
+			var accel := 70.0 if absf(target) > absf(_spool_w) else 22.0
 			_spool_w = move_toward(_spool_w, target, accel * delta)
 			firki.rotate_x(_spool_w * delta)
 
 
 func kick_speed_fov() -> void:
 	_fov_kick = 6.5
+
+
+func yank_spool() -> void:
+	## Each Q tap yanks manjha in — a visible inward flick of the firki.
+	_spool_w = -26.0
+	_play_line(true)
+
+
+func sag_spool() -> void:
+	_play_line(false)
 
 
 func look_towards(world_point: Vector3, delta: float, weight: float = 3.0) -> void:
@@ -91,7 +155,8 @@ func look_towards(world_point: Vector3, delta: float, weight: float = 3.0) -> vo
 	var target_yaw := atan2(-to.x, -to.z)
 	var target_pitch := atan2(to.y, Vector3(to.x, 0.0, to.z).length())
 	look_yaw = lerp_angle(look_yaw, target_yaw, clampf(weight * delta, 0.0, 1.0))
-	look_pitch = lerp(look_pitch, clampf(target_pitch, deg_to_rad(-80.0), deg_to_rad(75.0)), clampf(weight * delta, 0.0, 1.0))
+	## Don't crane all the way to the kite — boy stays in the lower frame.
+	look_pitch = lerp(look_pitch, clampf(target_pitch, deg_to_rad(-22.0), deg_to_rad(12.0)), clampf(weight * delta, 0.0, 1.0))
 
 
 func hand_position() -> Vector3:
@@ -101,3 +166,113 @@ func hand_position() -> Vector3:
 			return origin.global_position
 		return handle.global_position
 	return camera.global_position + camera.global_transform.basis * Vector3(0.08, -0.14, -0.38)
+
+
+func _update_locomotion(moving: bool, speed: float) -> void:
+	if _anim == null or _line_anim:
+		return
+	var clip := _walk if moving and _walk != &"" else _idle
+	if clip == &"":
+		return
+	if _anim.current_animation != String(clip):
+		_anim.speed_scale = 1.0
+		_play_clip(clip)
+	else:
+		_anim.speed_scale = 1.15 if moving and speed > WALK_SPEED + 0.2 else 1.0
+
+
+func _bind_clips() -> void:
+	if _anim == null:
+		return
+	for clip in _anim.get_animation_list():
+		var low := String(clip).to_lower()
+		if low.contains("idle") and _idle == &"":
+			_idle = StringName(clip)
+			_loop(clip)
+		elif low.contains("walk") and _walk == &"":
+			_walk = StringName(clip)
+			_loop(clip)
+		elif (low.contains("spell") or low.contains("cast") or low.contains("yank") or low.contains("kheench")) and _yank == &"":
+			_yank = StringName(clip)
+	if _idle == &"" and not _anim.get_animation_list().is_empty():
+		_idle = StringName(_anim.get_animation_list()[0])
+
+
+func _play_line(kheench: bool) -> void:
+	if _anim == null or _yank == &"":
+		return
+	_line_anim = true
+	if kheench:
+		_anim.speed_scale = 1.35
+		_anim.play(_yank, 0.08)
+	else:
+		_anim.speed_scale = 1.25
+		_anim.play_backwards(_yank)
+
+
+func _on_anim_finished(_anim_name: StringName) -> void:
+	_line_anim = false
+	if _anim:
+		_anim.speed_scale = 1.0
+
+
+func _play_clip(clip: StringName) -> void:
+	if _anim == null or clip == &"":
+		return
+	_anim.play(clip, 0.2)
+
+
+func _loop(clip: String) -> void:
+	if _anim == null:
+		return
+	var a := _anim.get_animation(clip)
+	if a:
+		a.loop_mode = Animation.LOOP_LINEAR
+
+
+func _find_anim(n: Node) -> AnimationPlayer:
+	if n is AnimationPlayer:
+		return n as AnimationPlayer
+	for c in n.get_children():
+		var found := _find_anim(c)
+		if found:
+			return found
+	return null
+
+
+func _find_skel(n: Node) -> Skeleton3D:
+	if n is Skeleton3D:
+		return n as Skeleton3D
+	for c in n.get_children():
+		var found := _find_skel(c)
+		if found:
+			return found
+	return null
+
+
+func _hide_slab(n: Node) -> void:
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		var aabb := mi.get_aabb()
+		if aabb.size.y < 0.22 and maxf(aabb.size.x, aabb.size.z) > 1.6 and aabb.position.y < 0.35:
+			mi.visible = false
+	for c in n.get_children():
+		_hide_slab(c)
+
+
+func _world_aabb(n: Node) -> AABB:
+	var acc := AABB()
+	var first := true
+	if n is VisualInstance3D:
+		acc = (n as Node3D).global_transform * (n as VisualInstance3D).get_aabb()
+		first = false
+	for c in n.get_children():
+		var sub := _world_aabb(c)
+		if sub.size.length_squared() < 0.0001:
+			continue
+		if first:
+			acc = sub
+			first = false
+		else:
+			acc = acc.merge(sub)
+	return acc

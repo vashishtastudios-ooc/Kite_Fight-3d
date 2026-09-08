@@ -67,7 +67,14 @@ func _spawn_from(pad: Vector3, aim: Vector3) -> void:
 	add_child(rocket)
 	_live += 1
 	rocket.tree_exited.connect(_on_gone)
+	if rocket.has_signal("resolved"):
+		rocket.resolved.connect(_on_resolved)
 	rocket.fire(pad, aim, _kite)
+
+
+func _on_resolved(_hit: bool, dodged: bool) -> void:
+	if dodged and _kite and _kite.has_method("add_pip"):
+		_kite.add_pip()
 
 
 func _pick_pad(used: Array[Vector3]) -> Vector3:

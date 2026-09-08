@@ -15,6 +15,17 @@ const SKY_ALT := 26.0
 const NEAR_DIST := 26.0
 const IDLE_SPIN_NEAR := TAU / 0.85
 const IDLE_SPIN_HIGH := TAU / 1.35
+## Idle (no kheench): the line goes slack, the kite loses lift and settles
+## down-wind on a slow glide. Tune the feel here.
+const IDLE_SLACK_MAX := 0.62       ## how loose the manjha gets when left alone
+const IDLE_SLACK_RATE := 0.5       ## slack built per second toward the max
+const IDLE_SINK := 3.1             ## base sink accel (m/s²), scaled by slack
+const IDLE_SINK_LOW_MUL := 1.3     ## sinks faster low in the weak, choppy air
+const IDLE_SINK_HIGH_MUL := 0.7    ## the stronger high wind holds it up longer
+const IDLE_DRIFT_LO := 0.45        ## down-wind push at a taut line
+const IDLE_DRIFT_HI := 1.15        ## down-wind push when fully slack (a loose sail)
+const IDLE_HEIGHT_SPAN := 45.0     ## altitude over which the layer blend runs
+const IDLE_GROUND_SOFT := 9.0      ## metres over the deck where the sink eases off
 const LINE_SEGS := 16
 const TAIL_LEN := 10
 const TAIL_SEG := 0.28
@@ -24,8 +35,14 @@ const NOSE_MESH_H := 0.26
 
 signal cut_down
 signal manjha_changed(value: float)
+signal pips_changed(pips: int)
 
 var killed_by_rocket: bool = false
+var pips: int = 0
+var dash_t: float = 0.0
+var steered_t: float = 0.0
+const PIPS_MAX := 3
+const DASH_TIME := 0.88
 
 const WindSys := preload("res://scripts/wind_system.gd")
 const CityGen := preload("res://scripts/city_generator.gd")
@@ -110,12 +127,15 @@ func park_on_roof() -> void:
 	line_length = LINE_START
 	manjha = 1.0
 	killed_by_rocket = false
+	pips = 0
+	dash_t = 0.0
 	_kheench = false
 	_dheel = false
 	global_position = hand_pos + Vector3(0.4, 0.2, -0.7)
 	_reset_tail()
 	_clear_speed_trail()
 	manjha_changed.emit(manjha)
+	pips_changed.emit(0)
 
 
 func launch() -> void:
@@ -129,6 +149,8 @@ func launch() -> void:
 	pull = 0.0
 	manjha = 1.0
 	killed_by_rocket = false
+	pips = 0
+	dash_t = 0.0
 	line_length = LINE_START
 	_kheench = false
 	_dheel = false
@@ -142,6 +164,7 @@ func launch() -> void:
 	_reset_tail()
 	_clear_speed_trail()
 	manjha_changed.emit(manjha)
+	pips_changed.emit(pips)
 
 
 func relaunch() -> void:
@@ -157,6 +180,10 @@ func set_kheench(held: bool) -> void:
 	_kheench = held
 	if held:
 		_dheel = false
+		if pips >= PIPS_MAX and dash_t <= 0.0:
+			pips = 0
+			dash_t = DASH_TIME
+			pips_changed.emit(pips)
 		# A real kheench is a short yank, not winding the firki home.
 		line_length = maxf(LINE_MIN, line_length - 1.6)
 		_enter_fly()
@@ -187,6 +214,9 @@ func kill_by_rocket() -> void:
 	if phase == Phase.CUT or phase == Phase.GROUNDED or phase == Phase.CRASHED:
 		return
 	killed_by_rocket = true
+	pips = 0
+	dash_t = 0.0
+	pips_changed.emit(0)
 	apply_cut()
 
 
@@ -204,6 +234,9 @@ func apply_cut() -> void:
 	velocity += _wind_at(global_position) * 0.6 + Vector3.UP * 1.5
 	_clear_speed_trail()
 	manjha_changed.emit(0.0)
+	pips = 0
+	dash_t = 0.0
+	pips_changed.emit(0)
 	cut_down.emit()
 
 
@@ -214,6 +247,31 @@ func damage_manjha(amount: float) -> void:
 	manjha_changed.emit(manjha)
 	if manjha <= 0.0:
 		apply_cut()
+
+
+func add_pip() -> void:
+	if not is_airborne() or phase == Phase.CUT:
+		return
+	var next := mini(PIPS_MAX, pips + 1)
+	if next != pips:
+		pips = next
+		pips_changed.emit(pips)
+
+
+func is_dashing() -> bool:
+	return dash_t > 0.0
+
+
+func is_cut_ready() -> bool:
+	return pips >= PIPS_MAX and dash_t <= 0.0
+
+
+func is_slack_for_cut() -> bool:
+	return phase == Phase.DHEEL or slack > 0.48
+
+
+func steered_recently() -> bool:
+	return steered_t > 0.0
 
 
 func nose_dir() -> Vector3:
@@ -232,6 +290,12 @@ func tick(delta: float, hand: Vector3, viewer: Vector3, reel: float, bias: float
 	viewer_pos = viewer
 	_bias = clampf(bias, -1.0, 1.0)
 	_bob_t += delta
+	if _kheench or _dheel:
+		steered_t = 0.55
+	else:
+		steered_t = maxf(0.0, steered_t - delta)
+	if dash_t > 0.0:
+		dash_t = maxf(0.0, dash_t - delta)
 	if phase == Phase.GROUNDED:
 		global_position = hand_pos + Vector3(0.35, 0.15, -0.65)
 		heading = 0.25
@@ -306,7 +370,9 @@ func _enter_fly() -> void:
 	var kick := FLY_SPEED
 	var w := _wind_at(global_position)
 	var along := w.dot(nose)
-	kick += clampf(along * 0.35, -6.0, 8.0)
+	kick += clampf(along * 0.18, -2.5, 3.5)
+	if dash_t > 0.0:
+		kick *= 2.0
 	velocity = nose * kick + Vector3.UP * 2.2
 	tension = 28.0
 
@@ -365,16 +431,35 @@ func _tick_spin(delta: float, w: Vector3) -> void:
 		heading += _bias * 2.4 * delta
 	ang_vel = move_toward(ang_vel, rate * spin_dir, 11.0 * delta)
 	heading += ang_vel * delta
+
+	## Left alone, the line pays no tension: it sags and the kite loses lift.
+	slack = move_toward(slack, IDLE_SLACK_MAX, IDLE_SLACK_RATE * delta)
+	tension = move_toward(tension, lerpf(9.0, 2.0, slack), delta * 8.0)
+
 	var a := _sky_axes()
 	var right: Vector3 = a["right"]
 	var up: Vector3 = a["up"]
 	var orbit := right * cos(heading) * 1.15 + up * sin(heading) * 0.32
-	var drift := Vector3(w.x, 0.2 + sin(_bob_t * 2.0) * 0.35, w.z) * 0.55
-	drift += right * _bias * 1.6
-	velocity = velocity.lerp(drift + orbit, 2.1 * delta)
+
+	## Wind layer: weak/choppy near the roof, strong/clean up high (from sample()).
+	var alt := altitude()
+	var height_t := clampf(alt / IDLE_HEIGHT_SPAN, 0.0, 1.0)
+	## A slack kite is just a loose sail — the wind carries it down-wind. The
+	## push grows as the line goes slack, and the high-altitude wind is already
+	## stronger in w, so it naturally drifts faster near the zenith.
+	var downwind := Vector3(w.x, 0.0, w.z) * lerpf(IDLE_DRIFT_LO, IDLE_DRIFT_HI, slack)
+	downwind += right * _bias * 1.6
+	var target := downwind + orbit
+	target.y += sin(_bob_t * 2.2) * 0.25  ## a little flutter, not lift
+	velocity = velocity.lerp(target, 2.1 * delta)
+
+	## Gravity-fed sink, scaled by how slack the line is and by the air layer.
+	## The lerp above damps it to a steady terminal glide, so it never nose-dives.
+	var sink_mul := lerpf(IDLE_SINK_LOW_MUL, IDLE_SINK_HIGH_MUL, height_t)
+	var ground_soft := clampf(alt / IDLE_GROUND_SOFT, 0.35, 1.0)
+	velocity.y -= IDLE_SINK * slack * sink_mul * ground_soft * delta
+
 	global_position += velocity * delta
-	slack = move_toward(slack, 0.1, delta * 1.4)
-	tension = move_toward(tension, 5.0, delta * 20.0)
 
 
 func _tick_fly(delta: float, w: Vector3) -> void:
@@ -393,8 +478,13 @@ func _tick_fly(delta: float, w: Vector3) -> void:
 	var climb_bias := lerpf(-0.05, 0.28, room)
 	if altitude() > SKY_ALT * 0.85:
 		climb_bias *= 0.35
-	var cruise := nose * FLY_SPEED + Vector3(0.0, climb_bias * FLY_SPEED, 0.0)
-	cruise += w * 0.5
+	var wind_dir := Vector3(w.x, 0.0, w.z)
+	var wind_mul := 1.0
+	if wind_dir.length() > 0.25:
+		wind_mul = lerpf(0.94, 1.08, clampf(nose.dot(wind_dir.normalized()) * 0.5 + 0.5, 0.0, 1.0))
+	var dash_mul := 2.0 if dash_t > 0.0 else 1.0
+	var cruise := nose * FLY_SPEED * wind_mul * dash_mul + Vector3(0.0, climb_bias * FLY_SPEED * dash_mul, 0.0)
+	cruise += w * 0.22
 	cruise += Vector3(sin(_bob_t * 7.0), cos(_bob_t * 5.4), sin(_bob_t * 6.1)) * 0.7
 	velocity = velocity.lerp(cruise, 8.2 * delta)
 	global_position += velocity * delta
@@ -547,9 +637,19 @@ func _update_readability() -> void:
 	var player_boost := 0.0 if is_ai else 1.0
 	var lift := far * lerpf(0.38, 0.68, player_boost)
 	var rim := far * lerpf(0.45, 1.05, player_boost)
+	var heat := 1.0 if (pips >= PIPS_MAX or dash_t > 0.0) else float(pips) / float(PIPS_MAX)
+	if heat > 0.04:
+		lift = maxf(lift, 0.22 + heat * 0.55)
+		rim = maxf(rim, 0.35 + heat * 1.1)
 	if _sail_mat:
 		_sail_mat.set_shader_parameter("lift", lift)
 		_sail_mat.set_shader_parameter("rim", rim)
+		if heat > 0.6:
+			_sail_mat.set_shader_parameter("rim_color", Color(1.0, 0.32, 0.72))
+		elif heat > 0.04:
+			_sail_mat.set_shader_parameter("rim_color", Color(1.0, 0.72, 0.38))
+		else:
+			_sail_mat.set_shader_parameter("rim_color", Color(1.0, 0.84, 0.28) if is_ai else Color(1.0, 0.84, 0.28))
 	if _outline_mat:
 		_outline_mat.albedo_color.a = lerpf(0.22, 0.72, far)
 		_outline_mat.emission_energy_multiplier = lerpf(0.12, 1.15, far)

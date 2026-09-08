@@ -61,4 +61,6 @@ script = ExtResource("5_kite")
 script = ExtResource("7_pech")
 
 [node name="HUD" type="CanvasLayer" parent="."]
+layer = 20
+process_mode = 3
 script = ExtResource("6_hud")

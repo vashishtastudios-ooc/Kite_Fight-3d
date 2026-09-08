@@ -1,12 +1,10 @@
 class_name WindSystem
 extends Node
 
-## Layered wind for a rooftop kite.
-## Base breeze drifts slowly. Gusts and lulls ramp in and out — they never snap.
-## Heading wanders. Higher air is stronger and smoother; near rooftops it chops.
+## Living breeze for a rooftop kite. Strength drifts. Heading wanders a little.
+## Gusts are the only event — they ramp in, peak, and trail off. No lulls.
 
 signal gust_began
-signal lull_began
 
 @export var mean_speed: float = 9.4
 @export var base_drift: float = 2.3
@@ -21,17 +19,13 @@ var last_sample: Vector3 = Vector3(0.0, 0.0, -8.4)
 var last_speed: float = 8.4
 var last_heading: float = 0.0
 var gust_amount: float = 0.0
-var lull_amount: float = 0.0
 var is_gusting: bool = false
-var is_lull: bool = false
 
 var _noise_base: FastNoiseLite
 var _noise_wander: FastNoiseLite
 var _noise_chop: FastNoiseLite
 var _gusts: Array[Dictionary] = []
-var _lulls: Array[Dictionary] = []
-var _next_gust: float = 3.5
-var _next_lull: float = 16.0
+var _next_gust: float = 11.0
 
 
 func _ready() -> void:
@@ -52,35 +46,21 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	time += delta
 	_next_gust -= delta
-	_next_lull -= delta
 	if _next_gust <= 0.0:
 		_spawn_gust()
-		_next_gust = randf_range(4.5, 12.0)
-	if _next_lull <= 0.0:
-		_spawn_lull()
-		_next_lull = randf_range(18.0, 38.0)
+		_next_gust = randf_range(12.0, 20.0)
 	_age_events(_gusts, delta)
-	_age_events(_lulls, delta)
 	gust_amount = _envelope_sum(_gusts)
-	lull_amount = _envelope_sum(_lulls)
 	var was_gust := is_gusting
-	var was_lull := is_lull
 	is_gusting = gust_amount > 0.22
-	is_lull = lull_amount > 0.28
 	if is_gusting and not was_gust:
 		gust_began.emit()
-	if is_lull and not was_lull:
-		lull_began.emit()
 
 
 func sample(world_pos: Vector3, near_buildings: float = 0.0, record: bool = true) -> Vector3:
 	var heading := _heading_at()
 	var base := _base_speed()
-	var gust := gust_amount
-	var lull := lull_amount
-
-	var speed := (base + gust) * (1.0 - 0.72 * lull)
-	speed = maxf(speed, 0.35)
+	var speed := maxf(base + gust_amount, 0.35)
 
 	var height_t := clampf((world_pos.y - rooftop_height) / 55.0, 0.0, 1.0)
 	# Low in the window: weaker and choppier. Near zenith: cleaner, stronger push.
@@ -102,15 +82,9 @@ func sample(world_pos: Vector3, near_buildings: float = 0.0, record: bool = true
 
 
 func debug_label() -> String:
-	if is_lull:
-		return "LULL"
 	if is_gusting:
 		return "GUST"
-	if last_speed >= 9.5:
-		return "WINDY"
-	if last_speed >= 6.0:
-		return "BREEZE"
-	return "LIGHT"
+	return ""
 
 
 func compass_letter() -> String:
@@ -151,16 +125,6 @@ func _spawn_gust() -> void:
 		"ramp_in": randf_range(1.15, 2.05),
 		"hold": randf_range(0.35, 0.9),
 		"ramp_out": randf_range(1.8, 3.4),
-	})
-
-
-func _spawn_lull() -> void:
-	_lulls.append({
-		"age": 0.0,
-		"peak": randf_range(0.45, 0.78),
-		"ramp_in": randf_range(1.2, 2.2),
-		"hold": randf_range(1.1, 2.8),
-		"ramp_out": randf_range(1.6, 3.0),
 	})
 
 

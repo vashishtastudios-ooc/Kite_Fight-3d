@@ -9,6 +9,8 @@ const WindsockSc := preload("res://scripts/windsock.gd")
 const PechSc := preload("res://scripts/pech.gd")
 const RivalAISc := preload("res://scripts/rival_ai.gd")
 const CHARKHI := preload("res://assets/terrace/pink thread spool 3d model.glb")
+const SettingsSc := preload("res://scripts/game_settings.gd")
+const PersonSc := preload("res://scripts/rooftop_person.gd")
 
 @onready var world_env: WorldEnvironment = $WorldEnvironment
 @onready var sun: DirectionalLight3D = $Sun
@@ -27,19 +29,31 @@ var _kheench_held: bool = false
 var _dheel_held: bool = false
 var _kite_back_cam: Camera3D
 var _back_view: bool = false
+var _intro_active: bool = true
+var _intro_cam: Camera3D
+var _intro_cam_start: Transform3D = Transform3D.IDENTITY
+var _intro_cam_start_fov: float = 74.0
+var _intro_cam_t: float = 0.0
+const INTRO_CAM_DUR := 6.0
 
 
 func _ready() -> void:
 	_bind_input()
 	_configure_world()
 	city.build()
+	## Point the sea's sun-glint at the actual sun so the golden path lines up.
+	city.set_water_sun(-sun.global_transform.basis.z)
 	wind.rooftop_height = city.rooftop_height
 	player.global_position = city.spawn_position
 	player.rooftop_bounds = city.rooftop_bounds
 	player.rooftop_y = city.spawn_position.y
 	player.look_yaw = 0.0
 	player.look_pitch = -0.06
-	player.capture_mouse()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	var settings := SettingsSc.new()
+	settings.load_from_disk()
+	settings.apply(self)
+	player.setup_avatar()
 	_build_handle()
 	kite.setup(wind, city)
 	kite.hand_pos = player.hand_position()
@@ -57,6 +71,8 @@ func _ready() -> void:
 	_rival_ai.name = "RivalAI"
 	add_child(_rival_ai)
 	_rival_ai.setup(rival, kite, pech, rival_hand)
+	hud.game_settings = settings
+	hud.graphics_host = self
 	hud.setup(wind, kite, rival, pech)
 	var rockets := preload("res://scripts/diwali_rockets.gd").new()
 	rockets.name = "DiwaliRockets"
@@ -66,24 +82,25 @@ func _ready() -> void:
 	hud.rockets = rockets
 	_setup_kite_cams()
 	_place_windsock()
+	_place_people()
 	var air := preload("res://scripts/wind_vfx.gd").new()
 	air.name = "WindVfx"
 	add_child(air)
 	air.setup(wind, city.spawn_position)
 	wind.sample(player.global_position + Vector3(0.0, 4.0, -8.0), 0.2, true)
-	kite.launch()
-	rival.launch()
-	_launch_look = 2.4
+	## Cold open on the sky. The in-hand charkhi and the rooftop flyer read as
+	## "ready"; the 1.5m sail is hidden until the toss so it never fills the
+	## title frame. The rival waits on its roof until you launch.
+	kite.visible = false
+	rival.visible = false
+	_snap_camera_to_sky()
+	_setup_intro_cam()
+	if hud:
+		hud.show_intro()
 	print("Patang rooftop ready. Buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
 
 
 func _setup_kite_cams() -> void:
-	if hud and hud.kite_close_cam:
-		var sv := hud.kite_close_cam.get_parent() as SubViewport
-		if sv:
-			sv.world_3d = get_viewport().world_3d
-		if player and player.camera and player.camera.environment:
-			hud.kite_close_cam.environment = player.camera.environment
 	_kite_back_cam = Camera3D.new()
 	_kite_back_cam.name = "KiteBackCam"
 	_kite_back_cam.fov = 58.0
@@ -112,24 +129,6 @@ func _update_kite_cams() -> void:
 	if to_kite.length_squared() < 0.2:
 		to_kite = -player.camera.global_transform.basis.z
 	var view := to_kite.normalized()
-	if hud and hud.kite_close_cam:
-		## On the manjha, just short of the bridle, looking at the kite from the front.
-		var hand := kite.hand_pos
-		var along := kp - hand
-		var span := along.length()
-		if span < 0.4:
-			along = view
-			span = 8.0
-		else:
-			along /= span
-		var standoff := clampf(span * 0.18, 2.8, 4.4)
-		if standoff > span - 1.3:
-			standoff = maxf(1.6, span - 1.3)
-		hud.kite_close_cam.global_position = kp - along * standoff
-		var up := player.camera.global_transform.basis.y
-		if up.length_squared() < 0.2:
-			up = Vector3.UP
-		_cam_look(hud.kite_close_cam, kp, up)
 	if _kite_back_cam:
 		_kite_back_cam.global_position = kp + view * 5.4 + Vector3.UP * 1.15
 		_cam_look(_kite_back_cam, player.global_position + Vector3(0.0, 1.35, 0.0))
@@ -149,18 +148,13 @@ func _cam_look(cam: Camera3D, target: Vector3, up: Vector3 = Vector3.UP) -> void
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+		if hud and hud.over_controls():
+			pass
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 			_reel = 1.6
 			get_viewport().set_input_as_handled()
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_reel = -1.6
-			get_viewport().set_input_as_handled()
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.physical_keycode == KEY_ESCAPE:
-			if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-			else:
-				get_tree().quit()
 			get_viewport().set_input_as_handled()
 
 
@@ -184,21 +178,43 @@ func _physics_process(delta: float) -> void:
 		kite.relaunch()
 		_launch_look = 1.4
 
+	## First toss clears the title, hands the view to first person, and sends
+	## the rival up to meet you.
+	if _intro_active and kite.is_airborne():
+		_intro_active = false
+		kite.visible = true
+		if _intro_cam:
+			_intro_cam.current = false
+			_intro_cam.queue_free()
+			_intro_cam = null
+		if player.camera:
+			player.camera.current = true
+		rival.visible = true
+		rival.launch()
+		_launch_look = 2.0
+		if hud:
+			hud.hide_intro()
+
 	if kheench != _kheench_held:
 		kite.set_kheench(kheench)
 		if kheench:
 			player.kick_speed_fov()
+			player.yank_spool()
 		_kheench_held = kheench
 	if dheel != _dheel_held:
 		kite.set_dheel(dheel)
+		if dheel:
+			player.sag_spool()
 		_dheel_held = dheel
 
 	kite.tick(delta, hand, viewer, reel, bias)
-	if _rival_ai:
+	## Hold the rival on its roof during the title — its AI would otherwise
+	## relaunch and dive the parked patang straight into the frame.
+	if _rival_ai and not _intro_active:
 		_rival_ai.tick(delta)
 	if pech:
 		pech.tick(delta, kite, rival)
-	player.tick(delta, kite.tension, kite.pull, kite.slack, bias, kite.payout_rate)
+	player.tick(delta, kite.tension, kite.pull, kite.slack, bias, kite.payout_rate, hud.zoom if hud else 0.0, kheench, dheel)
 
 	if Input.is_action_just_pressed("kite_back_view"):
 		_set_back_view(not _back_view)
@@ -207,32 +223,102 @@ func _physics_process(delta: float) -> void:
 
 	if not _back_view:
 		_follow_kite_cam(delta)
+	if _intro_active and _intro_cam:
+		_update_intro_cam(delta)
 	_launch_look = maxf(0.0, _launch_look - delta)
 
 
 func _follow_kite_cam(delta: float) -> void:
 	if kite == null:
 		return
-	if kite.phase == KiteSc.Phase.GROUNDED:
+	if not kite.is_airborne():
+		var rest := _intro_look_target() if _intro_active else _sky_look_target()
+		player.look_towards(rest, delta, 2.6)
 		return
-	var aim := kite.global_position + kite.velocity * 0.16
-	var w := 5.2
+	## Keep the boy in the lower frame. Aim between a shoulder shot and the kite
+	## so a high dart does not become only sky, and a close kite does not spin off him.
+	var kite_pt := kite.global_position + kite.velocity * 0.16
+	var chest := player.global_position + Vector3(0.0, 0.9, 0.0)
+	var face := Vector3(-sin(player.look_yaw), 0.0, -cos(player.look_yaw))
+	var framed := chest + face * 14.0 + Vector3(0.0, 5.2, 0.0)
+	var to_k := kite_pt - player.global_position
+	to_k.y = 0.0
+	var behind := to_k.dot(face) < 2.0
+	var dist := player.global_position.distance_to(kite.global_position)
+	var kite_w := 0.0 if behind else lerpf(0.22, 0.48, clampf((dist - 10.0) / 50.0, 0.0, 1.0))
+	var aim := framed.lerp(kite_pt, kite_w)
+	var w := 4.6
 	if kite.phase == KiteSc.Phase.FLY:
-		w = 11.0
+		w = 7.5
 	elif kite.phase == KiteSc.Phase.DHEEL or kite.phase == KiteSc.Phase.CUT:
-		w = 7.0
-	elif kite.phase == KiteSc.Phase.SPIN:
 		w = 6.0
+	elif kite.phase == KiteSc.Phase.SPIN:
+		w = 5.2
 	elif _launch_look > 0.0:
-		w = 8.0
+		w = 6.5
 	player.look_towards(aim, delta, w)
+
+
+func _sky_look_target() -> Vector3:
+	## Up ~31° and out over the open fly window (-Z), so the frame holds sky
+	## and the far skyline — where the patang is about to climb.
+	return player.hand_position() + Vector3(0.0, 24.0, -40.0)
+
+
+func _intro_look_target() -> Vector3:
+	## Over the boy's shoulder into the fly window — third-person title.
+	return player.global_position + Vector3(0.0, 12.0, -26.0)
+
+
+func _setup_intro_cam() -> void:
+	## A cinematic that opens on a wide, hazy city vista and glides down into
+	## the over-shoulder rooftop shot, then hands off on the toss.
+	_intro_cam = Camera3D.new()
+	_intro_cam.name = "IntroCam"
+	_intro_cam.fov = _intro_cam_start_fov
+	_intro_cam.near = 0.2
+	_intro_cam.far = 2400.0
+	if player and player.camera and player.camera.environment:
+		_intro_cam.environment = player.camera.environment
+	add_child(_intro_cam)
+	var sp := city.spawn_position
+	_intro_cam.global_position = Vector3(sp.x, city.rooftop_height + 95.0, sp.z + 70.0)
+	_intro_cam.look_at(Vector3(sp.x, city.rooftop_height + 45.0, sp.z - 480.0), Vector3.UP)
+	_intro_cam_start = _intro_cam.global_transform
+	_intro_cam_t = 0.0
+	_intro_cam.current = true
+
+
+func _update_intro_cam(delta: float) -> void:
+	if _intro_cam == null or player == null or player.camera == null:
+		return
+	_intro_cam_t = minf(1.0, _intro_cam_t + delta / INTRO_CAM_DUR)
+	## Ease in-out for a settled, filmic move.
+	var e := smoothstep(0.0, 1.0, _intro_cam_t)
+	var end_xf := player.camera.global_transform
+	var pos := _intro_cam_start.origin.lerp(end_xf.origin, e)
+	var q0 := _intro_cam_start.basis.get_rotation_quaternion()
+	var q1 := end_xf.basis.get_rotation_quaternion()
+	_intro_cam.global_transform = Transform3D(Basis(q0.slerp(q1, e)), pos)
+	_intro_cam.fov = lerpf(_intro_cam_start_fov, player.camera.fov, e)
+
+
+func _snap_camera_to_sky() -> void:
+	if player == null or player.camera == null:
+		return
+	var tgt := _intro_look_target() if _intro_active else _sky_look_target()
+	var to := tgt - player.camera.global_position
+	if to.length() < 0.2:
+		return
+	player.look_yaw = atan2(-to.x, -to.z)
+	player.look_pitch = clampf(atan2(to.y, Vector3(to.x, 0.0, to.z).length()), deg_to_rad(-80.0), deg_to_rad(75.0))
 
 
 func _configure_world() -> void:
 	## Dusk, not night: sun ~10° up, warmer and dimmer than late afternoon.
 	sun.rotation_degrees = Vector3(-10.0, 122.0, 0.0)
-	sun.light_color = Color(1.0, 0.70, 0.46)
-	sun.light_energy = 0.50
+	sun.light_color = Color(1.0, 0.72, 0.50)
+	sun.light_energy = 0.72
 	sun.shadow_enabled = true
 	sun.shadow_blur = 2.1
 	sun.light_angular_distance = 0.95
@@ -261,7 +347,9 @@ func _configure_world() -> void:
 	sky_mat.set_shader_parameter("sun_col", Color(1.0, 0.58, 0.22))
 	sky_mat.set_shader_parameter("sun_size", 0.085)
 	sky_mat.set_shader_parameter("sun_blur", 0.12)
-	sky_mat.set_shader_parameter("horizon_falloff", 5.8)
+	## Lower falloff spreads the warm horizon glow higher, so there is always a
+	## sliver of atmosphere at the rim, even looking down from high up.
+	sky_mat.set_shader_parameter("horizon_falloff", 4.5)
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 	sky.process_mode = Sky.PROCESS_MODE_REALTIME
@@ -270,19 +358,28 @@ func _configure_world() -> void:
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.30
+	env.ambient_light_energy = 0.46
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_white = 5.0
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_light_color = Color(0.42, 0.36, 0.42)
-	env.fog_density = 0.001
-	env.fog_aerial_perspective = 0.78
-	env.fog_sky_affect = 0.34
-	env.fog_depth_begin = 180.0
-	env.fog_depth_end = 980.0
-	env.fog_depth_curve = 0.74
+	## Warm dusk haze that matches the horizon sky, so the far city dissolves
+	## into the same colour it is seen against instead of a grey seam.
+	env.fog_light_color = Color(0.90, 0.66, 0.56)
+	env.fog_density = 0.0013
+	## Aerial perspective at full: distant geometry AND ground take the exact sky
+	## colour behind them, so the far ground is indistinguishable from the
+	## horizon haze — no empty band at the edges, just seamless atmosphere.
+	env.fog_aerial_perspective = 1.0
+	## Haze the horizon band of the sky too, so the line where city meets sky is
+	## soft rather than a hard edge.
+	env.fog_sky_affect = 0.55
+	env.fog_depth_begin = 300.0
+	## Opened back up now that the sea fills the distance — the city fades into
+	## haze over the water, and the water has its own horizon dissolve.
+	env.fog_depth_end = 1200.0
+	env.fog_depth_curve = 0.9
 	env.ssao_enabled = true
 	env.ssao_radius = 1.4
 	env.ssao_intensity = 1.35
@@ -292,8 +389,8 @@ func _configure_world() -> void:
 	env.glow_bloom = 0.09
 	env.glow_hdr_threshold = 0.78
 	env.adjustment_enabled = true
-	env.adjustment_brightness = 0.78
-	env.adjustment_contrast = 1.10
+	env.adjustment_brightness = 0.94
+	env.adjustment_contrast = 1.06
 	env.adjustment_saturation = 1.12
 	world_env.environment = env
 	if player and player.camera:
@@ -331,7 +428,7 @@ func _build_handle() -> void:
 	var firki := Node3D.new()
 	firki.name = "Firki"
 	handle.add_child(firki)
-	firki.position = Vector3(0.02, 0.0, 0.0)
+	firki.position = Vector3.ZERO
 	var model := CHARKHI.instantiate() as Node3D
 	if model == null:
 		return
@@ -343,7 +440,7 @@ func _build_handle() -> void:
 	var disc := maxf(aabb.size.x, aabb.size.z)
 	if disc < 0.02:
 		disc = maxf(aabb.size.y * 0.22, 0.08)
-	var s := 0.143 / disc
+	var s := 0.13 / disc
 	model.scale = Vector3(s, s, s)
 	model.force_update_transform()
 	aabb = _mesh_aabb(model)
@@ -392,6 +489,25 @@ func _mesh_aabb(node: Node) -> AABB:
 	return acc
 
 
+func _place_people() -> void:
+	var sky := city.spawn_position + Vector3(0.0, 6.0, -50.0)
+	var mate := PersonSc.new()
+	mate.name = "TerraceMate"
+	add_child(mate)
+	var b := city.rooftop_bounds
+	var feet := Vector3(b.end.x - 0.9, city.rooftop_height + 0.02, city.spawn_position.z - 0.35)
+	feet.x = clampf(feet.x, b.position.x + 0.45, b.end.x - 0.45)
+	feet.z = clampf(feet.z, b.position.y + 0.45, b.end.y - 0.45)
+	mate.setup(feet, sky)
+
+	if city.rocket_pads.is_empty():
+		return
+	var other := PersonSc.new()
+	other.name = "RoofFlyer"
+	add_child(other)
+	other.setup(city.rocket_pads[0], city.spawn_position)
+
+
 func _place_windsock() -> void:
 	var sock := WindsockSc.new()
 	sock.name = "Windsock"
@@ -407,9 +523,9 @@ func _bind_input() -> void:
 	_add_key("walk_right", KEY_D)
 	_add_key("sprint", KEY_SHIFT)
 	_add_key("kheench", KEY_Q)
-	_add_mouse("kheench", MOUSE_BUTTON_LEFT)
+	_strip_mouse("kheench")
 	_add_key("dheel", KEY_E)
-	_add_mouse("dheel", MOUSE_BUTTON_RIGHT)
+	_strip_mouse("dheel")
 	_add_key("bias_left", KEY_LEFT)
 	_add_key("bias_right", KEY_RIGHT)
 	_add_key("reel_in", KEY_UP)
@@ -427,6 +543,17 @@ func _add_key(action: String, key: Key) -> void:
 	ev.physical_keycode = key
 	if not _has_event(action, ev):
 		InputMap.action_add_event(action, ev)
+
+
+func _strip_mouse(action: String) -> void:
+	if not InputMap.has_action(action):
+		return
+	var drop: Array[InputEvent] = []
+	for ev in InputMap.action_get_events(action):
+		if ev is InputEventMouseButton:
+			drop.append(ev)
+	for ev in drop:
+		InputMap.action_erase_event(action, ev)
 
 
 func _add_mouse(action: String, button: MouseButton) -> void:

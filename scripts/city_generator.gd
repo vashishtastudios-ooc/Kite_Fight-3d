@@ -8,6 +8,7 @@ const GROUND_SHADER := preload("res://shaders/ground.gdshader")
 const HORIZON_SHADER := preload("res://shaders/horizon_silhouette.gdshader")
 const STYLIZED_SHADER := preload("res://shaders/stylized.gdshader")
 const TILE_SHADER := preload("res://shaders/roof_tiles.gdshader")
+const WATER_SHADER := preload("res://shaders/water.gdshader")
 const CHAIR_SCENE := preload("res://assets/terrace/wooden+chair+3d+model.glb")
 const KIT_BLUE := preload("res://assets/buildings/blue building 3d model.glb")
 const KIT_TALL := preload("res://assets/buildings/tall modern building 3d model.glb")
@@ -49,6 +50,7 @@ var _tower_budget: int = 0
 var _last_kit_aabb: AABB
 var _building_mat: ShaderMaterial
 var _styl_mat: ShaderMaterial
+var _water_mat: ShaderMaterial
 var _box_mesh: BoxMesh
 var _cyl_mesh: CylinderMesh
 var _sph_mesh: SphereMesh
@@ -81,6 +83,8 @@ func build() -> void:
 	_scatter_city_360()
 	_dress_side_trees()
 	_add_far_kit_city()
+	_scatter_far_greenery()
+	_build_water()
 
 
 func _place_launcher_homes() -> void:
@@ -166,11 +170,23 @@ func _build_ground() -> void:
 	ground.mesh = plane
 	var gmat := ShaderMaterial.new()
 	gmat.shader = GROUND_SHADER
-	gmat.set_shader_parameter("ground_albedo", load("res://assets/ground/Road007_2K-JPG_Color.jpg"))
+	## Only micro bump/roughness detail is sampled; colour, lanes and dirt are
+	## built procedurally so no baked highway markings show.
 	gmat.set_shader_parameter("ground_rough", load("res://assets/ground/Road007_2K-JPG_Roughness.jpg"))
 	gmat.set_shader_parameter("ground_normal", load("res://assets/ground/Road007_2K-JPG_NormalGL.jpg"))
-	gmat.set_shader_parameter("ground_repeat", Vector2(0.133, 0.133))
-	gmat.set_shader_parameter("haze_color", Color(0.40, 0.34, 0.40))
+	gmat.set_shader_parameter("ground_repeat", Vector2(0.22, 0.22))
+	## Road grid aligned to the plot layout (roads run the plot boundaries).
+	gmat.set_shader_parameter("grid_spacing", PLOT)
+	gmat.set_shader_parameter("grid_origin", Vector2(16.0, 82.0))
+	gmat.set_shader_parameter("road_half_width", 3.6)
+	gmat.set_shader_parameter("road_color", Color(0.26, 0.22, 0.19))
+	gmat.set_shader_parameter("dirt_color", Color(0.47, 0.36, 0.25))
+	gmat.set_shader_parameter("dirt_color2", Color(0.36, 0.27, 0.18))
+	## Far ground dissolves into the exact horizon-sky tone, on the same distance
+	## window as the fog, so distant ground reads as haze/sky — not empty lots.
+	gmat.set_shader_parameter("haze_color", Color(0.90, 0.66, 0.56))
+	gmat.set_shader_parameter("haze_start", 300.0)
+	gmat.set_shader_parameter("haze_end", 640.0)
 	ground.material_override = gmat
 	ground.position = Vector3(0.0, -0.04, 40.0)
 	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -184,6 +200,36 @@ func _build_ground() -> void:
 	col.position = Vector3(0.0, -0.54, 40.0)
 	body.add_child(col)
 	add_child(body)
+
+
+func _build_water() -> void:
+	## A calm dusk sea surrounding the city out to the horizon. Transparent over
+	## the land (discarded there), full water past the shore. Cheap, mobile-safe.
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(8000.0, 8000.0)
+	plane.subdivide_width = 16
+	plane.subdivide_depth = 16
+	var sea := MeshInstance3D.new()
+	sea.name = "Sea"
+	sea.mesh = plane
+	## Just above the street ground so it sorts on top past the shore.
+	sea.position = Vector3(0.0, -0.02, 92.0)
+	sea.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sea.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	sea.extra_cull_margin = 4000.0
+	_water_mat = ShaderMaterial.new()
+	_water_mat.shader = WATER_SHADER
+	_water_mat.set_shader_parameter("hub", Vector3(0.0, 0.0, 92.0))
+	_water_mat.set_shader_parameter("land_radius", 780.0)
+	_water_mat.set_shader_parameter("shore_width", 60.0)
+	_water_mat.set_shader_parameter("haze_color", Color(0.90, 0.66, 0.56))
+	sea.material_override = _water_mat
+	add_child(sea)
+
+
+func set_water_sun(to_sun: Vector3) -> void:
+	if _water_mat and to_sun.length() > 0.01:
+		_water_mat.set_shader_parameter("sun_dir", to_sun.normalized())
 
 
 func _build_player_rooftop() -> void:
@@ -534,13 +580,72 @@ func _add_far_kit_city() -> void:
 	cheap.append_array(_kit_mid)
 	if cheap.is_empty():
 		return
-	_fill_far_ring(cheap, 210.0, 380.0, 26.0, 0.04, 14.0, 34.0, 15.0, 21.0)
-	_fill_far_ring(cheap, 380.0, 560.0, 36.0, 0.06, 13.0, 32.0, 18.0, 26.0)
-	_fill_far_ring(cheap, 560.0, 800.0, 48.0, 0.08, 12.0, 30.0, 24.0, 34.0)
-	## Sparse outer homes for the high V-cam — few instances, no collision.
-	_fill_far_ring(cheap, 800.0, 1080.0, 88.0, 0.14, 16.0, 28.0, 22.0, 30.0)
+	## Keep the city solid out to the fog line (~640 m) so it reads as one dense
+	## metropolis dissolving into haze. Nothing is built past the fog since it
+	## would be invisible — that keeps startup fast.
+	_fill_far_ring(cheap, 210.0, 380.0, 21.0, 0.02, 14.0, 34.0, 15.0, 21.0)
+	_fill_far_ring(cheap, 380.0, 560.0, 26.0, 0.03, 13.0, 32.0, 18.0, 26.0)
+	_fill_far_ring(cheap, 560.0, 720.0, 28.0, 0.03, 12.0, 30.0, 18.0, 28.0)
 	_plug_forward_horizon(cheap)
-	_add_horizon_haze()
+
+
+func _scatter_far_greenery() -> void:
+	## Break up the far ground with clumps of the tree kits so the distant map
+	## reads as a lived-in city, not bare lots. Cheap: no collision, far-draw
+	## fade, no shadows, and never in the open kite window.
+	var kits: Array[PackedScene] = [KIT_TREE_DENSE, KIT_TREE, KIT_TREE_ORANGE, KIT_TREE_BIG, KIT_TREE_STYL]
+	var hub := Vector3(0.0, 0.0, 92.0)
+	var r := 165.0
+	var ring := 0
+	while r < 640.0:
+		var spacing := 28.0
+		var count := maxi(10, int((TAU * r) / spacing))
+		var twist := float(ring) * 0.27
+		for i in count:
+			if _rng.randf() < 0.42:
+				continue
+			var ang := twist + (float(i) / float(count)) * TAU
+			var rad := r + _rng.randf_range(-spacing * 0.32, spacing * 0.32)
+			var x := hub.x + sin(ang) * rad
+			var z := hub.z - cos(ang) * rad
+			var radius := Vector2(x, z - 92.0).length()
+			if _in_kite_window(x, z, radius):
+				continue
+			var kit: PackedScene = kits[_rng.randi_range(0, kits.size() - 1)]
+			var h := _rng.randf_range(10.5, 16.0)
+			## Occasional tight pair so it clumps like real greenery.
+			var reps := 2 if _rng.randf() < 0.28 else 1
+			for _k in reps:
+				var jx := 0.0 if _k == 0 else _rng.randf_range(-6.0, 6.0)
+				var jz := 0.0 if _k == 0 else _rng.randf_range(-6.0, 6.0)
+				_place_far_tree(kit, Vector3(x + jx, 0.0, z + jz), h, _rng.randf_range(0.0, TAU))
+		r += spacing * 1.35
+		ring += 1
+
+
+func _place_far_tree(scene: PackedScene, feet: Vector3, target_h: float, yaw: float) -> bool:
+	if scene == null:
+		return false
+	if _on_building_foot(feet):
+		return false
+	var node := scene.instantiate() as Node3D
+	if node == null:
+		return false
+	add_child(node)
+	node.rotation.y = yaw
+	var aabb := _node_aabb(node)
+	if aabb.size.y < 0.05:
+		node.queue_free()
+		return false
+	var s := target_h / aabb.size.y
+	node.scale = Vector3(s, s, s)
+	node.force_update_transform()
+	aabb = _node_aabb(node)
+	node.global_position = Vector3(feet.x, -aabb.position.y, feet.z)
+	node.force_update_transform()
+	_hide_imported_ground(node)
+	_mark_far_draw(node)
+	return true
 
 
 func _fill_far_ring(kits: Array[PackedScene], r0: float, r1: float, spacing: float, skip: float, h_lo: float, h_hi: float, fp_lo: float, fp_hi: float) -> void:
@@ -572,10 +677,11 @@ func _fill_far_ring(kits: Array[PackedScene], r0: float, r1: float, spacing: flo
 
 
 func _plug_forward_horizon(kits: Array[PackedScene]) -> void:
-	## Close the street vanishing point with mid-rise blocks behind the clock tower.
+	## Close the street vanishing point with mid-rise blocks behind the clock
+	## tower. Only as deep as the fog reaches — past that it would be invisible.
 	var cell := 18.0
 	for ix in range(-8, 9):
-		for iz in range(0, 28):
+		for iz in range(0, 17):
 			var x := float(ix) * cell + _rng.randf_range(-2.5, 2.5)
 			var z := -118.0 - float(iz) * cell + _rng.randf_range(-2.0, 2.0)
 			if absf(x) < 11.0 and z > -175.0:
@@ -611,8 +717,44 @@ func _add_horizon_haze() -> void:
 	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	var mat := ShaderMaterial.new()
 	mat.shader = HORIZON_SHADER
-	mat.set_shader_parameter("tint", Color(0.42, 0.34, 0.40))
-	mat.set_shader_parameter("opacity", 0.40)
+	## Faint warm filler only — the dense far city is the real horizon now, so
+	## this just softens any last sliver where rooftops meet haze.
+	mat.set_shader_parameter("tint", Color(0.86, 0.60, 0.48))
+	mat.set_shader_parameter("opacity", 0.32)
+	mi.material_override = mat
+	add_child(mi)
+
+
+func _add_horizon_treeline() -> void:
+	## Distant rolling hills beyond the city — far enough and tall enough to rise
+	## above the hazed far-city rooflines, so the rim reads as land receding into
+	## haze, not a hard skyline edge. Two soft bands for depth.
+	_horizon_hill_ring(1320.0, 165.0, 24.0, 0.62, Color(0.52, 0.44, 0.48), 0.8)
+	_horizon_hill_ring(1160.0, 110.0, 46.0, 0.66, Color(0.50, 0.43, 0.42), 0.45)
+
+
+func _horizon_hill_ring(radius: float, height: float, columns: float, hscale: float, tint: Color, opacity: float) -> void:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = radius
+	mesh.bottom_radius = radius
+	mesh.height = height
+	mesh.radial_segments = 96
+	mesh.rings = 1
+	mesh.cap_top = false
+	mesh.cap_bottom = false
+	var mi := MeshInstance3D.new()
+	mi.name = "HorizonHills"
+	mi.mesh = mesh
+	mi.position = Vector3(0.0, height * 0.5, 92.0)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	var mat := ShaderMaterial.new()
+	mat.shader = HORIZON_SHADER
+	mat.set_shader_parameter("tint", tint)
+	mat.set_shader_parameter("opacity", opacity)
+	mat.set_shader_parameter("columns", columns)
+	mat.set_shader_parameter("roundness", 1.0)
+	mat.set_shader_parameter("height_scale", hscale)
 	mi.material_override = mat
 	add_child(mi)
 
