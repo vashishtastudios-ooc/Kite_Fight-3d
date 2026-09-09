@@ -2,9 +2,12 @@ class_name PauseMenu
 extends Control
 
 const SettingsSc := preload("res://scripts/game_settings.gd")
+const KiteSkins := preload("res://scripts/kite_skins.gd")
+const Brand := preload("res://scripts/brand.gd")
 
 signal quit_requested
 signal settings_changed
+signal kite_chosen(id: String)
 
 var settings: SettingsSc
 
@@ -15,9 +18,12 @@ var _quality: OptionButton
 var _full: CheckButton
 var _hints: CheckButton
 var _how_box: PanelContainer
+var _kite_box: PanelContainer
+var _kite_row: HBoxContainer
 var _open: bool = false
 var _in_settings: bool = false
 var _in_how: bool = false
+var _in_kites: bool = false
 
 
 func is_open() -> bool:
@@ -37,11 +43,16 @@ func _ready() -> void:
 func setup(settings_in: SettingsSc) -> void:
 	settings = settings_in
 	_sync_widgets()
+	refresh_kite_cards("")
 
 
 func toggle() -> void:
 	if _open and _in_how:
 		_in_how = false
+		open_pause()
+		return
+	if _open and _in_kites:
+		_in_kites = false
 		open_pause()
 		return
 	if _open and _in_settings:
@@ -58,6 +69,7 @@ func open_pause() -> void:
 	_open = true
 	_in_settings = false
 	_in_how = false
+	_in_kites = false
 	get_tree().paused = true
 	_set_page(true, false)
 
@@ -66,6 +78,7 @@ func open_settings() -> void:
 	_open = true
 	_in_settings = true
 	_in_how = false
+	_in_kites = false
 	get_tree().paused = true
 	_sync_widgets()
 	_set_page(true, true)
@@ -75,12 +88,32 @@ func open_how() -> void:
 	_open = true
 	_in_settings = false
 	_in_how = true
+	_in_kites = false
 	get_tree().paused = true
 	_dim.visible = true
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	_pause_box.visible = false
 	_settings_box.visible = false
+	if _kite_box:
+		_kite_box.visible = false
 	_how_box.visible = true
+	mouse_filter = Control.MOUSE_FILTER_STOP
+
+
+func open_kites() -> void:
+	_open = true
+	_in_settings = false
+	_in_how = false
+	_in_kites = true
+	get_tree().paused = true
+	refresh_kite_cards("")
+	_dim.visible = true
+	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_box.visible = false
+	_settings_box.visible = false
+	_how_box.visible = false
+	if _kite_box:
+		_kite_box.visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 
@@ -88,6 +121,7 @@ func close() -> void:
 	_open = false
 	_in_settings = false
 	_in_how = false
+	_in_kites = false
 	get_tree().paused = false
 	_set_page(false, false)
 
@@ -95,10 +129,12 @@ func close() -> void:
 func _set_page(show_dim: bool, settings_page: bool) -> void:
 	_dim.visible = show_dim
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP if show_dim else Control.MOUSE_FILTER_IGNORE
-	_pause_box.visible = show_dim and not settings_page and not _in_how
+	_pause_box.visible = show_dim and not settings_page and not _in_how and not _in_kites
 	_settings_box.visible = show_dim and settings_page
 	if _how_box:
 		_how_box.visible = show_dim and _in_how
+	if _kite_box:
+		_kite_box.visible = show_dim and _in_kites
 	mouse_filter = Control.MOUSE_FILTER_STOP if show_dim else Control.MOUSE_FILTER_IGNORE
 
 
@@ -118,10 +154,11 @@ func _build() -> void:
 	_pause_box = _make_card()
 	center.add_child(_pause_box)
 	var pause_col := _vbox(_pause_box)
-	pause_col.add_child(_title("PATANG"))
-	pause_col.add_child(_caption("Rooftop paused"))
+	pause_col.add_child(_title(Brand.TITLE))
+	pause_col.add_child(_caption(Brand.TAGLINE))
 	pause_col.add_child(_gap(12))
 	pause_col.add_child(_btn("Resume", close))
+	pause_col.add_child(_btn("Choose kite", open_kites))
 	pause_col.add_child(_btn("How to play", open_how))
 	pause_col.add_child(_btn("Settings", open_settings))
 	pause_col.add_child(_btn("Quit", func() -> void: quit_requested.emit()))
@@ -170,11 +207,53 @@ func _build() -> void:
 	center.add_child(_how_box)
 	_fill_how(_how_box)
 
+	_kite_box = _make_card()
+	_kite_box.custom_minimum_size = Vector2(620, 320)
+	center.add_child(_kite_box)
+	_fill_kites(_kite_box)
+
 
 func _back_from_settings() -> void:
 	_in_settings = false
 	_in_how = false
+	_in_kites = false
 	open_pause()
+
+
+func _fill_kites(card: PanelContainer) -> void:
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	card.add_child(v)
+	v.add_child(_title("CHOOSE KITE"))
+	v.add_child(_caption("Your sail. The rival flies a different one."))
+	_kite_row = HBoxContainer.new()
+	_kite_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_kite_row.add_theme_constant_override("separation", 14)
+	v.add_child(_kite_row)
+	v.add_child(_btn("Back", open_pause))
+	refresh_kite_cards("")
+
+
+func refresh_kite_cards(selected: String) -> void:
+	if _kite_row == null:
+		return
+	if selected == "" and settings:
+		selected = KiteSkins.clamp_id(settings.kite_id)
+	elif selected == "":
+		selected = KiteSkins.SAFFRON
+	for c in _kite_row.get_children():
+		_kite_row.remove_child(c)
+		c.queue_free()
+	for id in KiteSkins.ids():
+		_kite_row.add_child(KiteSkins.make_card(id, id == selected, _on_kite_pick))
+
+
+func _on_kite_pick(id: String) -> void:
+	if settings:
+		settings.kite_id = KiteSkins.clamp_id(id)
+		settings.save_to_disk()
+	kite_chosen.emit(id)
+	call_deferred("refresh_kite_cards", id)
 
 
 func _fill_how(card: PanelContainer) -> void:
@@ -291,8 +370,11 @@ func _title(text: String) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	l.add_theme_font_size_override("font_size", 28)
-	l.add_theme_color_override("font_color", Color(1.0, 0.9, 0.68))
+	l.add_theme_font_override("font", Brand.display_font())
+	l.add_theme_font_size_override("font_size", 32)
+	l.add_theme_color_override("font_color", Brand.GOLD)
+	l.add_theme_color_override("font_outline_color", Brand.INK)
+	l.add_theme_constant_override("outline_size", 6)
 	return l
 
 

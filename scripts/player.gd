@@ -3,15 +3,18 @@ extends CharacterBody3D
 
 const WALK_SPEED := 3.4
 const SPRINT_SPEED := 5.2
-const BODY := preload("res://assets/people/stylized+boy+3d+model (1).glb")
 const HEIGHT := 1.62
 const CAM_BOOM := Vector3(0.42, 1.82, 2.65)
+const BODY_BOY := preload("res://assets/people/stylized+boy+3d+model (1).glb")
+const BODY_GIRL := preload("res://assets/people/stylized+female+3d+newmodel.glb")
 
 var look_yaw: float = 0.0
 var look_pitch: float = -0.08
 var mouse_sens: float = 0.0022
 var rooftop_bounds: Rect2 = Rect2(-6.4, 86.2, 12.8, 12.4)
 var rooftop_y: float = 20.3
+var intro_lock: bool = false
+var body_id: String = "boy"
 
 @onready var head: Node3D = $Head
 @onready var camera: Camera3D = $Head/Camera3D
@@ -32,14 +35,30 @@ const CLOSE_FOV := 5.5
 func _ready() -> void:
 	floor_snap_length = 0.4
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if camera:
+		camera.far = 2400.0
+	if head:
+		head.position = CAM_BOOM
 
 
 func capture_mouse() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
-func setup_avatar() -> void:
-	var model := BODY.instantiate() as Node3D
+func setup_avatar(id: String = "boy") -> void:
+	body_id = "girl" if id == "girl" else "boy"
+	if handle and handle.get_parent() != null and handle.get_parent() != head:
+		handle.reparent(head)
+	var old := get_node_or_null("Body")
+	if old:
+		old.free()
+	_anim = null
+	_idle = &""
+	_walk = &""
+	_yank = &""
+	_line_anim = false
+	var scene: PackedScene = BODY_GIRL if body_id == "girl" else BODY_BOY
+	var model := scene.instantiate() as Node3D
 	if model == null:
 		push_warning("Missing player body GLB")
 		return
@@ -69,8 +88,11 @@ func setup_avatar() -> void:
 		hold.bone_name = "R_Hand"
 		skel.add_child(hold)
 		handle.reparent(hold)
-		handle.position = Vector3(0.02, 0.04, 0.06)
-		handle.rotation_degrees = Vector3(0.0, 90.0, 80.0)
+		## Wrist → palm along the hand bone (+Y). Shift left into the grip
+		## (from behind, +X on the right hand sits outside the palm).
+		handle.position = Vector3(-0.04, 0.08, 0.018)
+		handle.rotation_degrees = Vector3(8.0, 0.0, 0.0)
+		handle.scale = Vector3.ONE
 	if camera:
 		camera.far = 2400.0
 	if head:
@@ -87,10 +109,12 @@ func tick(delta: float, _tension: float, _pull: float, _slack: float, _bias: flo
 		head.rotation.y = 0.0
 		head.rotation.z = 0.0
 
-	var input := Vector2(
-		Input.get_action_strength("walk_right") - Input.get_action_strength("walk_left"),
-		Input.get_action_strength("walk_back") - Input.get_action_strength("walk_forward")
-	)
+	var input := Vector2.ZERO
+	if not intro_lock:
+		input = Vector2(
+			Input.get_action_strength("walk_right") - Input.get_action_strength("walk_left"),
+			Input.get_action_strength("walk_back") - Input.get_action_strength("walk_forward")
+		)
 	var speed := SPRINT_SPEED if Input.is_action_pressed("sprint") else WALK_SPEED
 	var wish := (transform.basis * Vector3(input.x, 0.0, input.y))
 	wish.y = 0.0
@@ -148,15 +172,16 @@ func sag_spool() -> void:
 	_play_line(false)
 
 
-func look_towards(world_point: Vector3, delta: float, weight: float = 3.0) -> void:
+func look_towards(world_point: Vector3, delta: float, weight: float = 3.0, chase: bool = false) -> void:
 	var to := world_point - camera.global_position
 	if to.length() < 0.2:
 		return
 	var target_yaw := atan2(-to.x, -to.z)
 	var target_pitch := atan2(to.y, Vector3(to.x, 0.0, to.z).length())
 	look_yaw = lerp_angle(look_yaw, target_yaw, clampf(weight * delta, 0.0, 1.0))
-	## Don't crane all the way to the kite — boy stays in the lower frame.
-	look_pitch = lerp(look_pitch, clampf(target_pitch, deg_to_rad(-22.0), deg_to_rad(12.0)), clampf(weight * delta, 0.0, 1.0))
+	var lo := deg_to_rad(-68.0) if chase else deg_to_rad(-22.0)
+	var hi := deg_to_rad(18.0) if chase else deg_to_rad(12.0)
+	look_pitch = lerp(look_pitch, clampf(target_pitch, lo, hi), clampf(weight * delta, 0.0, 1.0))
 
 
 func hand_position() -> Vector3:

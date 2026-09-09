@@ -37,6 +37,8 @@ var rooftop_bounds: Rect2 = Rect2(-6.5, 86.0, 13.0, 13.0)
 var building_aabbs: Array[AABB] = []
 var player_building_aabb: AABB
 var rocket_pads: Array[Vector3] = []
+var palace_aabb: AABB
+var rival_roof_aabb: AABB
 
 var _rng := RandomNumberGenerator.new()
 var _kit_houses: Array[PackedScene] = []
@@ -87,6 +89,17 @@ func build() -> void:
 	_build_water()
 
 
+func palace_watch_spot() -> Vector3:
+	## Flat front-left of the pink palace roof — the 3 o'clock terrace in the
+	## title shot, facing the player. Sit below the corner chhatris.
+	if palace_aabb.size.length_squared() < 1.0:
+		return Vector3(38.0, 24.2, 43.5)
+	var x := lerpf(palace_aabb.position.x, palace_aabb.end.x, 0.28)
+	var z := palace_aabb.end.z - clampf(palace_aabb.size.z * 0.10, 1.2, 2.8)
+	var y := palace_aabb.end.y - clampf(palace_aabb.size.y * 0.08, 1.4, 2.8)
+	return Vector3(x, y + 0.05, z)
+
+
 func _place_launcher_homes() -> void:
 	## Three visible roofs in front: left, right, and a third further down the right street.
 	rocket_pads.clear()
@@ -130,24 +143,15 @@ func _fallback_flank_pads() -> void:
 
 
 func rival_hand_position() -> Vector3:
-	## Neighbor roof to the side — never in the forward kite window.
-	var best := Vector3(-26.0, 22.0, 90.0)
-	var best_score := -999.0
-	for aabb in building_aabbs:
-		if aabb.intersects(player_building_aabb.grow(4.0)):
-			continue
-		var top := Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.end.y, aabb.position.z + aabb.size.z * 0.5)
-		if top.y < 14.0 or top.y > 40.0:
-			continue
-		if top.z < 88.0 or top.z > 108.0:
-			continue
-		if absf(top.x) < 16.0:
-			continue
-		var score := 50.0 - absf(absf(top.x) - 26.0) - absf(top.z - 90.0) * 0.5
-		if score > best_score:
-			best_score = score
-			best = top + Vector3(0.0, 1.2, 0.0)
-	return best
+	## Right-hand house next to the player terrace (the +X neighbor).
+	if rival_roof_aabb.size.length_squared() > 1.0:
+		var c := rival_roof_aabb.get_center()
+		return Vector3(
+			c.x - rival_roof_aabb.size.x * 0.08,
+			rival_roof_aabb.end.y + 0.10,
+			c.z - rival_roof_aabb.size.z * 0.16
+		)
+	return Vector3(24.5, 17.4, 90.0)
 
 
 func nearest_building_chop(pos: Vector3) -> float:
@@ -391,6 +395,7 @@ func _build_side_neighbors() -> void:
 	## Plot centers on the street grid (roads at x=16 and z=82).
 	if _place_kit_building(KIT_HOUSE, Vector3(26.0, 0.0, 92.0), 16.5, PI, 11.5):
 		_dress_kit_roof(_last_kit_aabb)
+		rival_roof_aabb = _last_kit_aabb
 	_place_kit_building(KIT_SHOP, Vector3(26.0, 0.0, 74.0), 10.5, 0.1, 10.5)
 	if _place_kit_building(KIT_HOUSE, Vector3(26.0, 0.0, 110.0), 17.0, 0.05, 11.5):
 		_dress_kit_roof(_last_kit_aabb)
@@ -451,6 +456,7 @@ func _scatter_city_360() -> void:
 	_place_kit_building(KIT_CLOCK, Vector3(80.0, 0.0, 14.0), 36.0, -0.18, 8.4)
 	## Pink palace on the right lot (not the road), square to the grid.
 	_place_kit_building(KIT_PALACE, Vector3(46.0, 0.0, 32.0), 26.4, 0.0, 26.0)
+	palace_aabb = _last_kit_aabb
 	for ix in range(-10, 12):
 		for iz in range(-10, 9):
 			var px := 16.0 + (float(ix) + 0.5) * PLOT

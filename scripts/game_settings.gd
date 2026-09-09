@@ -3,10 +3,12 @@ extends RefCounted
 
 ## Video and HUD prefs. Quality presets change cost a lot more than FOV zoom.
 const PATH := "user://settings.cfg"
+const KiteSkins := preload("res://scripts/kite_skins.gd")
 
 var quality: int = 1
 var fullscreen: bool = false
 var show_hints: bool = true
+var kite_id: String = "saffron"
 
 
 func load_from_disk() -> void:
@@ -16,6 +18,7 @@ func load_from_disk() -> void:
 	quality = clampi(int(cfg.get_value("video", "quality", 1)), 0, 2)
 	fullscreen = bool(cfg.get_value("video", "fullscreen", false))
 	show_hints = bool(cfg.get_value("ui", "hints", true))
+	kite_id = KiteSkins.clamp_id(str(cfg.get_value("play", "kite", "saffron")))
 
 
 func save_to_disk() -> void:
@@ -23,6 +26,7 @@ func save_to_disk() -> void:
 	cfg.set_value("video", "quality", quality)
 	cfg.set_value("video", "fullscreen", fullscreen)
 	cfg.set_value("ui", "hints", show_hints)
+	cfg.set_value("play", "kite", kite_id)
 	cfg.save(PATH)
 
 

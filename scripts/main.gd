@@ -11,6 +11,8 @@ const RivalAISc := preload("res://scripts/rival_ai.gd")
 const CHARKHI := preload("res://assets/terrace/pink thread spool 3d model.glb")
 const SettingsSc := preload("res://scripts/game_settings.gd")
 const PersonSc := preload("res://scripts/rooftop_person.gd")
+const KiteSkins := preload("res://scripts/kite_skins.gd")
+const TitleKiteSc := preload("res://scripts/title_kite.gd")
 
 @onready var world_env: WorldEnvironment = $WorldEnvironment
 @onready var sun: DirectionalLight3D = $Sun
@@ -34,7 +36,20 @@ var _intro_cam: Camera3D
 var _intro_cam_start: Transform3D = Transform3D.IDENTITY
 var _intro_cam_start_fov: float = 74.0
 var _intro_cam_t: float = 0.0
+var _cam_chase: bool = false
+var _flyer_picked: bool = false
+var _character_picked: bool = false
+var _game_mode: String = ""
+var _rockets: Node
+var _char_ui_shown: bool = false
+var _preview_boy: PersonSc
+var _preview_girl: PersonSc
+var _palace_girl: PersonSc
+var _terrace_mate: PersonSc
+var _title_kite: Node3D
 const INTRO_CAM_DUR := 6.0
+const BODY_BOY := preload("res://assets/people/stylized+boy+3d+model (1).glb")
+const BODY_GIRL := preload("res://assets/people/stylized+female+3d+newmodel.glb")
 
 
 func _ready() -> void:
@@ -53,9 +68,10 @@ func _ready() -> void:
 	var settings := SettingsSc.new()
 	settings.load_from_disk()
 	settings.apply(self)
-	player.setup_avatar()
-	_build_handle()
-	kite.setup(wind, city)
+	player.intro_lock = true
+	if player.camera:
+		player.camera.far = 2400.0
+	kite.setup(wind, city, [], settings.kite_id)
 	kite.hand_pos = player.hand_position()
 	var rival_colors: Array[Color] = [
 		Color(0.18, 0.62, 0.28),
@@ -63,7 +79,7 @@ func _ready() -> void:
 		Color(0.12, 0.48, 0.22),
 		Color(0.98, 0.95, 0.82),
 	]
-	rival.setup(wind, city, rival_colors)
+	rival.setup(wind, city, rival_colors, KiteSkins.rival_id(settings.kite_id))
 	rival.is_ai = true
 	var rival_hand := city.rival_hand_position()
 	rival.hand_pos = rival_hand
@@ -74,12 +90,17 @@ func _ready() -> void:
 	hud.game_settings = settings
 	hud.graphics_host = self
 	hud.setup(wind, kite, rival, pech)
-	var rockets := preload("res://scripts/diwali_rockets.gd").new()
-	rockets.name = "DiwaliRockets"
-	add_child(rockets)
-	rockets.setup(kite, city)
+	hud.character_chosen.connect(_on_character_chosen)
+	hud.mode_chosen.connect(_on_mode_chosen)
+	_rockets = preload("res://scripts/diwali_rockets.gd").new()
+	_rockets.name = "DiwaliRockets"
+	add_child(_rockets)
+	_rockets.setup(kite, city)
+	if _rockets.has_signal("player_dodged"):
+		_rockets.player_dodged.connect(_on_player_dodged)
 	hud.player = player
-	hud.rockets = rockets
+	hud.rockets = _rockets
+	_rockets.enabled = false
 	_setup_kite_cams()
 	_place_windsock()
 	_place_people()
@@ -95,9 +116,8 @@ func _ready() -> void:
 	rival.visible = false
 	_snap_camera_to_sky()
 	_setup_intro_cam()
-	if hud:
-		hud.show_intro()
-	print("Patang rooftop ready. Buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
+	_spawn_title_kite()
+	print("Patangbaz rooftop ready. Buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
 
 
 func _setup_kite_cams() -> void:
@@ -170,7 +190,7 @@ func _physics_process(delta: float) -> void:
 	var hand := player.hand_position()
 	var viewer := player.camera.global_position
 
-	if Input.is_action_just_pressed("launch"):
+	if Input.is_action_just_pressed("launch") and _flyer_picked:
 		if kite.phase == KiteSc.Phase.GROUNDED or kite.phase == KiteSc.Phase.CRASHED or kite.phase == KiteSc.Phase.CUT:
 			kite.launch()
 			_launch_look = 1.6
@@ -189,8 +209,12 @@ func _physics_process(delta: float) -> void:
 			_intro_cam = null
 		if player.camera:
 			player.camera.current = true
-		rival.visible = true
-		rival.launch()
+		if _game_mode == "battle":
+			rival.visible = true
+			if not rival.is_airborne():
+				rival.launch()
+		else:
+			rival.visible = false
 		_launch_look = 2.0
 		if hud:
 			hud.hide_intro()
@@ -210,9 +234,9 @@ func _physics_process(delta: float) -> void:
 	kite.tick(delta, hand, viewer, reel, bias)
 	## Hold the rival on its roof during the title — its AI would otherwise
 	## relaunch and dive the parked patang straight into the frame.
-	if _rival_ai and not _intro_active:
+	if _rival_ai and _game_mode == "battle":
 		_rival_ai.tick(delta)
-	if pech:
+	if pech and _game_mode == "battle":
 		pech.tick(delta, kite, rival)
 	player.tick(delta, kite.tension, kite.pull, kite.slack, bias, kite.payout_rate, hud.zoom if hud else 0.0, kheench, dheel)
 
@@ -225,6 +249,13 @@ func _physics_process(delta: float) -> void:
 		_follow_kite_cam(delta)
 	if _intro_active and _intro_cam:
 		_update_intro_cam(delta)
+		if not _char_ui_shown and _intro_cam_t >= 1.0:
+			_char_ui_shown = true
+			if hud:
+				hud.show_character_select()
+			if _title_kite and _title_kite.has_method("recede"):
+				_title_kite.recede()
+				_title_kite = null
 	_launch_look = maxf(0.0, _launch_look - delta)
 
 
@@ -232,12 +263,21 @@ func _follow_kite_cam(delta: float) -> void:
 	if kite == null:
 		return
 	if not kite.is_airborne():
+		_cam_chase = false
 		var rest := _intro_look_target() if _intro_active else _sky_look_target()
 		player.look_towards(rest, delta, 2.6)
 		return
-	## Keep the boy in the lower frame. Aim between a shoulder shot and the kite
-	## so a high dart does not become only sky, and a close kite does not spin off him.
 	var kite_pt := kite.global_position + kite.velocity * 0.16
+	var alt := kite.global_position.y - player.global_position.y
+	var off := _kite_leaving_view(kite_pt)
+	if off or alt > 20.0:
+		_cam_chase = true
+	elif _kite_well_in_view(kite_pt) and alt < 15.0:
+		_cam_chase = false
+	if _cam_chase:
+		var w := 8.5 if kite.phase == KiteSc.Phase.FLY else 6.8
+		player.look_towards(kite_pt, delta, w, true)
+		return
 	var chest := player.global_position + Vector3(0.0, 0.9, 0.0)
 	var face := Vector3(-sin(player.look_yaw), 0.0, -cos(player.look_yaw))
 	var framed := chest + face * 14.0 + Vector3(0.0, 5.2, 0.0)
@@ -247,16 +287,30 @@ func _follow_kite_cam(delta: float) -> void:
 	var dist := player.global_position.distance_to(kite.global_position)
 	var kite_w := 0.0 if behind else lerpf(0.22, 0.48, clampf((dist - 10.0) / 50.0, 0.0, 1.0))
 	var aim := framed.lerp(kite_pt, kite_w)
-	var w := 4.6
-	if kite.phase == KiteSc.Phase.FLY:
-		w = 7.5
-	elif kite.phase == KiteSc.Phase.DHEEL or kite.phase == KiteSc.Phase.CUT:
-		w = 6.0
-	elif kite.phase == KiteSc.Phase.SPIN:
-		w = 5.2
-	elif _launch_look > 0.0:
-		w = 6.5
-	player.look_towards(aim, delta, w)
+	player.look_towards(aim, delta, 5.0)
+
+
+func _kite_leaving_view(pt: Vector3) -> bool:
+	return _kite_screen_margin(pt) < 0.08
+
+
+func _kite_well_in_view(pt: Vector3) -> bool:
+	return _kite_screen_margin(pt) > 0.18
+
+
+func _kite_screen_margin(pt: Vector3) -> float:
+	if player == null or player.camera == null:
+		return 1.0
+	var cam := player.camera
+	if cam.is_position_behind(pt):
+		return -1.0
+	var sp: Vector2 = cam.unproject_position(pt)
+	var sz: Vector2 = cam.get_viewport().get_visible_rect().size
+	if sz.x < 8.0 or sz.y < 8.0:
+		return 1.0
+	var mx := minf(sp.x / sz.x, 1.0 - sp.x / sz.x)
+	var my := minf(sp.y / sz.y, 1.0 - sp.y / sz.y)
+	return minf(mx, my)
 
 
 func _sky_look_target() -> Vector3:
@@ -266,7 +320,10 @@ func _sky_look_target() -> Vector3:
 
 
 func _intro_look_target() -> Vector3:
-	## Over the boy's shoulder into the fly window — third-person title.
+	## During boy/girl pick, tilt down so both idle flyers read on the terrace.
+	if _char_ui_shown and not _character_picked:
+		return player.global_position + Vector3(0.0, 2.2, -7.5)
+	## Over the flyer's shoulder into the fly window — third-person title.
 	return player.global_position + Vector3(0.0, 12.0, -26.0)
 
 
@@ -287,6 +344,13 @@ func _setup_intro_cam() -> void:
 	_intro_cam_start = _intro_cam.global_transform
 	_intro_cam_t = 0.0
 	_intro_cam.current = true
+
+
+func _spawn_title_kite() -> void:
+	_title_kite = TitleKiteSc.new()
+	_title_kite.name = "TitleKite"
+	add_child(_title_kite)
+	_title_kite.setup(Vector3(city.spawn_position.x, city.rooftop_height, city.spawn_position.z))
 
 
 func _update_intro_cam(delta: float) -> void:
@@ -434,14 +498,30 @@ func _build_handle() -> void:
 		return
 	firki.add_child(model)
 	_hide_tripo_ground(model)
-	model.rotation_degrees = Vector3(0.0, 0.0, 90.0)
+	model.rotation_degrees = Vector3.ZERO
+	model.scale = Vector3.ONE
 	model.force_update_transform()
 	var aabb := _mesh_aabb(model)
+	## Mesh is a tall cylinder (Y = axle). Scale disc and axle separately so it
+	## reads as a handheld charkhi in the boy's palm, not a tiny pill.
 	var disc := maxf(aabb.size.x, aabb.size.z)
+	var axle := aabb.size.y
+	if aabb.size.x >= aabb.size.y and aabb.size.x >= aabb.size.z:
+		axle = aabb.size.x
+		disc = maxf(aabb.size.y, aabb.size.z)
+	elif aabb.size.z >= aabb.size.y and aabb.size.z >= aabb.size.x:
+		axle = aabb.size.z
+		disc = maxf(aabb.size.x, aabb.size.y)
 	if disc < 0.02:
-		disc = maxf(aabb.size.y * 0.22, 0.08)
-	var s := 0.13 / disc
-	model.scale = Vector3(s, s, s)
+		disc = 0.08
+	if axle < 0.02:
+		axle = 0.12
+	const DISC := 0.18
+	const AXLE := 0.132
+	var s_disc := DISC / disc
+	var s_axle := AXLE / axle
+	model.scale = Vector3(s_disc, s_axle, s_disc)
+	model.rotation_degrees = Vector3(0.0, 0.0, 90.0)
 	model.force_update_transform()
 	aabb = _mesh_aabb(model)
 	model.global_position += firki.global_position - aabb.get_center()
@@ -449,7 +529,7 @@ func _build_handle() -> void:
 	var line_at := Marker3D.new()
 	line_at.name = "LineOrigin"
 	handle.add_child(line_at)
-	line_at.position = firki.position + Vector3(0.0, 0.02, -0.06)
+	line_at.position = Vector3(0.0, 0.0, -0.04)
 
 
 func _hide_tripo_ground(node: Node) -> void:
@@ -472,12 +552,14 @@ func _no_shadow(node: Node) -> void:
 func _mesh_aabb(node: Node) -> AABB:
 	var acc := AABB()
 	var first := true
-	if node is VisualInstance3D:
+	if node is VisualInstance3D and node is Node3D and (node as Node3D).visible:
 		var local: AABB = (node as VisualInstance3D).get_aabb()
 		var xf := (node as Node3D).global_transform
 		acc = xf * local
 		first = false
 	for child in node.get_children():
+		if child is Node3D and not (child as Node3D).visible:
+			continue
 		var sub := _mesh_aabb(child)
 		if sub.size.length_squared() < 0.0001:
 			continue
@@ -490,22 +572,102 @@ func _mesh_aabb(node: Node) -> AABB:
 
 
 func _place_people() -> void:
+	var cam := city.spawn_position + Vector3(0.0, 1.45, 3.4)
+	_preview_boy = PersonSc.new()
+	_preview_boy.name = "PreviewBoy"
+	add_child(_preview_boy)
+	_preview_boy.setup(city.spawn_position + Vector3(-1.55, 0.0, -2.15), cam, null, BODY_BOY, false, true)
+
+	_preview_girl = PersonSc.new()
+	_preview_girl.name = "PreviewGirl"
+	add_child(_preview_girl)
+	_preview_girl.setup(city.spawn_position + Vector3(1.55, 0.0, -2.15), cam, null, BODY_GIRL, false, true)
+
+	_palace_girl = PersonSc.new()
+	_palace_girl.name = "PalaceGirl"
+	add_child(_palace_girl)
+	_palace_girl.setup(city.palace_watch_spot(), city.spawn_position, null, BODY_GIRL)
+
 	var sky := city.spawn_position + Vector3(0.0, 6.0, -50.0)
-	var mate := PersonSc.new()
-	mate.name = "TerraceMate"
-	add_child(mate)
-	var b := city.rooftop_bounds
-	var feet := Vector3(b.end.x - 0.9, city.rooftop_height + 0.02, city.spawn_position.z - 0.35)
-	feet.x = clampf(feet.x, b.position.x + 0.45, b.end.x - 0.45)
-	feet.z = clampf(feet.z, b.position.y + 0.45, b.end.y - 0.45)
-	mate.setup(feet, sky)
+	var rival_flyer := PersonSc.new()
+	rival_flyer.name = "RivalFlyer"
+	add_child(rival_flyer)
+	rival_flyer.setup(city.rival_hand_position(), sky, CHARKHI, BODY_BOY, true)
 
 	if city.rocket_pads.is_empty():
 		return
 	var other := PersonSc.new()
 	other.name = "RoofFlyer"
 	add_child(other)
-	other.setup(city.rocket_pads[0], city.spawn_position)
+	other.setup(city.rocket_pads[0], city.spawn_position, null, BODY_BOY)
+
+
+func _on_character_chosen(id: String) -> void:
+	if _character_picked:
+		return
+	_character_picked = true
+	player.intro_lock = false
+	player.setup_avatar(id)
+	_build_handle()
+	if _preview_boy:
+		_preview_boy.queue_free()
+		_preview_boy = null
+	if _preview_girl:
+		_preview_girl.queue_free()
+		_preview_girl = null
+	_spawn_terrace_mate("girl" if id == "boy" else "boy")
+
+
+func _on_mode_chosen(id: String) -> void:
+	if _flyer_picked:
+		return
+	_game_mode = "save" if id == "save" else "battle"
+	_flyer_picked = true
+	if hud:
+		hud.game_mode = _game_mode
+	if _rockets:
+		_rockets.enabled = _game_mode == "save"
+	kite.fight_pips = _game_mode == "battle"
+	rival.fight_pips = _game_mode == "battle"
+	if _game_mode == "save":
+		rival.visible = false
+	else:
+		var fight_hand := _battle_hand()
+		rival.hand_pos = fight_hand
+		if _rival_ai:
+			_rival_ai.hand = fight_hand
+		rival.visible = true
+		rival.launch()
+
+
+func _battle_hand() -> Vector3:
+	return city.rival_hand_position()
+
+
+func _mate_feet() -> Vector3:
+	## Front-right railing, the old green-boy spot, close to the fly edge.
+	var b := city.rooftop_bounds
+	var feet := Vector3(b.end.x - 1.15, city.rooftop_height + 0.02, b.position.y + 1.2)
+	feet.x = clampf(feet.x, b.position.x + 0.45, b.end.x - 0.45)
+	feet.z = clampf(feet.z, b.position.y + 0.55, b.end.y - 0.45)
+	return feet
+
+
+func _spawn_terrace_mate(id: String) -> void:
+	if _terrace_mate:
+		_terrace_mate.queue_free()
+		_terrace_mate = null
+	var pack: PackedScene = BODY_GIRL if id == "girl" else BODY_BOY
+	_terrace_mate = PersonSc.new()
+	_terrace_mate.name = "TerraceMate"
+	add_child(_terrace_mate)
+	var sky := city.spawn_position + Vector3(0.0, 6.0, -50.0)
+	_terrace_mate.setup(_mate_feet(), sky, CHARKHI, pack, true)
+
+
+func _on_player_dodged() -> void:
+	if _palace_girl:
+		_palace_girl.play_clap()
 
 
 func _place_windsock() -> void:

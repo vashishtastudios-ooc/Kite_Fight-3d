@@ -5,6 +5,12 @@ const KiteSc := preload("res://scripts/kite.gd")
 const PechSc := preload("res://scripts/pech.gd")
 const SettingsSc := preload("res://scripts/game_settings.gd")
 const PauseSc := preload("res://scripts/pause_menu.gd")
+const KiteSkins := preload("res://scripts/kite_skins.gd")
+const Brand := preload("res://scripts/brand.gd")
+const TitleCardSc := preload("res://scripts/title_card.gd")
+
+signal character_chosen(id: String)
+signal mode_chosen(id: String)
 
 var wind: WindSys
 var kite: KiteSc
@@ -14,6 +20,7 @@ var player: Node
 var rockets: Node
 var game_settings: SettingsSc
 var graphics_host: Node
+var game_mode: String = ""
 
 var _wind_label: Label
 var _status: Label
@@ -37,6 +44,15 @@ var _intro: Control
 var _intro_prompt: Label
 var _intro_t: float = 0.0
 var _intro_on: bool = false
+var _kite_row: HBoxContainer
+var _kite_cards: Array[Button] = []
+var _char_row: HBoxContainer
+var _char_label: Label
+var _mode_row: HBoxContainer
+var _mode_label: Label
+var _pip_cap: Label
+var _hud_chrome: Control
+var _title_card: Control
 
 
 func setup(wind_in: WindSys, kite_in: KiteSc, rival_in: KiteSc = null, pech_in: PechSc = null) -> void:
@@ -59,6 +75,14 @@ func _build() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
+	_hud_chrome = Control.new()
+	_hud_chrome.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hud_chrome.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud_chrome.visible = false
+	_hud_chrome.modulate.a = 0.0
+	root.add_child(_hud_chrome)
+	var hud := _hud_chrome
+
 	var rail := ColorRect.new()
 	rail.color = Color(0.05, 0.06, 0.08, 0.55)
 	rail.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -70,11 +94,11 @@ func _build() -> void:
 	rail.offset_top = 0.0
 	rail.offset_right = 58.0
 	rail.offset_bottom = 0.0
-	root.add_child(rail)
+	hud.add_child(rail)
 
-	_wind_label = _make_label(root, Vector2(72, 28), 22)
-	_status = _make_label(root, Vector2(72, 60), 18)
-	_hint = _make_label(root, Vector2(72, 0), 16)
+	_wind_label = _make_label(hud, Vector2(72, 28), 22)
+	_status = _make_label(hud, Vector2(72, 60), 18)
+	_hint = _make_label(hud, Vector2(72, 0), 16)
 	_hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	_hint.offset_left = 72.0
 	_hint.offset_top = -96.0
@@ -82,14 +106,14 @@ func _build() -> void:
 	_hint.offset_bottom = -32.0
 	_hint.text = "Q dart   ·   E dheel   ·   Wheel line   ·   Space toss   ·   R relaunch   ·   V look back   ·   Left bar zooms   ·   ESC menu"
 
-	_bar(root, Vector2(72, 92), Color(0.05, 0.08, 0.12, 0.45))
-	_meter_fill = _bar(root, Vector2(72, 92), Color(0.55, 0.82, 1.0, 0.9), 140)
+	_bar(hud, Vector2(72, 92), Color(0.05, 0.08, 0.12, 0.45))
+	_meter_fill = _bar(hud, Vector2(72, 92), Color(0.55, 0.82, 1.0, 0.9), 140)
 
-	_pech_label = _make_label(root, Vector2(72, 112), 20)
+	_pech_label = _make_label(hud, Vector2(72, 112), 20)
 	_pech_label.modulate = Color(1.0, 0.82, 0.3, 0.0)
 	_pech_label.text = "Pink kite: Q dashes to cut   ·   E sag to slip"
 
-	_kaata = _make_label(root, Vector2(0, 0), 72)
+	_kaata = _make_label(hud, Vector2(0, 0), 72)
 	_kaata.set_anchors_preset(Control.PRESET_CENTER)
 	_kaata.offset_left = -280.0
 	_kaata.offset_right = 280.0
@@ -102,19 +126,20 @@ func _build() -> void:
 	_kaata.add_theme_constant_override("shadow_offset_x", 3)
 	_kaata.add_theme_constant_override("shadow_offset_y", 3)
 
-	var title := _make_label(root, Vector2(72, 8), 14)
-	title.modulate = Color(1, 1, 1, 0.7)
-	title.text = "PATANG  ·  ROOFTOP"
-	_build_zoom_bar(root)
-	_rocket_label = _make_label(root, Vector2(72, 136), 16)
+	var title := _make_label(hud, Vector2(72, 8), 14)
+	title.modulate = Color(1.0, 0.84, 0.38, 0.85)
+	title.add_theme_font_override("font", Brand.display_font())
+	title.text = Brand.TITLE
+	_build_zoom_bar(hud)
+	_rocket_label = _make_label(hud, Vector2(72, 136), 16)
 	_rocket_label.modulate = Color(1.0, 0.38, 0.22, 0.0)
 	_rocket_label.text = "ROCKET  INBOUND"
-	_score_label = _make_label(root, Vector2(72, 158), 18)
+	_score_label = _make_label(hud, Vector2(72, 158), 18)
 	_score_label.modulate = Color(1.0, 0.88, 0.62, 0.9)
 	_pip_row = HBoxContainer.new()
 	_pip_row.position = Vector2(72, 184)
 	_pip_row.add_theme_constant_override("separation", 8)
-	root.add_child(_pip_row)
+	hud.add_child(_pip_row)
 	_pips.clear()
 	for _i in 3:
 		var d := ColorRect.new()
@@ -122,10 +147,13 @@ func _build() -> void:
 		d.color = Color(0.22, 0.14, 0.12, 0.85)
 		_pip_row.add_child(d)
 		_pips.append(d)
-	var pip_cap := _make_label(root, Vector2(138, 182), 14)
+	var pip_cap := _make_label(hud, Vector2(138, 182), 14)
 	pip_cap.text = "CUT CHARGE"
 	pip_cap.modulate = Color(1.0, 0.55, 0.78, 0.85)
-	_build_menu_button(root)
+	_pip_cap = pip_cap
+	_build_menu_button(hud)
+	_title_card = TitleCardSc.new()
+	root.add_child(_title_card)
 	_build_intro(root)
 	_menu = PauseSc.new()
 	add_child(_menu)
@@ -134,6 +162,7 @@ func _build() -> void:
 		_menu.setup(game_settings)
 	_menu.quit_requested.connect(func() -> void: get_tree().quit())
 	_menu.settings_changed.connect(_apply_settings)
+	_menu.kite_chosen.connect(_pick_kite)
 	_apply_settings()
 
 
@@ -236,7 +265,48 @@ func over_controls() -> bool:
 	var mouse := get_viewport().get_mouse_position()
 	if _gear and _gear.get_global_rect().has_point(mouse):
 		return true
+	if _intro_on and _char_row and _char_row.visible and _char_row.get_global_rect().has_point(mouse):
+		return true
+	if _intro_on and _mode_row and _mode_row.visible and _mode_row.get_global_rect().has_point(mouse):
+		return true
 	return over_zoom()
+
+
+func _current_kite_id() -> String:
+	if game_settings:
+		return KiteSkins.clamp_id(game_settings.kite_id)
+	if kite:
+		return kite.sail_id
+	return KiteSkins.SAFFRON
+
+
+func _rebuild_kite_cards() -> void:
+	if _kite_row == null:
+		return
+	for c in _kite_row.get_children():
+		_kite_row.remove_child(c)
+		c.queue_free()
+	_kite_cards.clear()
+	var selected := _current_kite_id()
+	for id in KiteSkins.ids():
+		var card := KiteSkins.make_card(id, id == selected, _pick_kite)
+		_kite_row.add_child(card)
+		_kite_cards.append(card)
+
+
+func _pick_kite(id: String) -> void:
+	id = KiteSkins.clamp_id(id)
+	if game_settings:
+		game_settings.kite_id = id
+		game_settings.save_to_disk()
+	if kite:
+		kite.set_sail(id)
+	if rival and (kite == null or not kite.is_airborne()):
+		rival.set_sail(KiteSkins.rival_id(id))
+	## Cards are the buttons that fired this pick — free them next frame.
+	call_deferred("_rebuild_kite_cards")
+	if _menu:
+		_menu.call_deferred("refresh_kite_cards", id)
 
 
 func toggle_menu() -> void:
@@ -298,53 +368,282 @@ func _build_intro(root: Control) -> void:
 
 	var box := VBoxContainer.new()
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_theme_constant_override("separation", 8)
 	box.set_anchors_preset(Control.PRESET_CENTER)
 	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	box.grow_vertical = Control.GROW_DIRECTION_BOTH
-	box.offset_left = -380.0
-	box.offset_right = 380.0
+	box.offset_left = -520.0
+	box.offset_right = 520.0
 	## Sit the block in the lower third so the sky and the kite read above it.
-	box.offset_top = 80.0
-	box.offset_bottom = 300.0
+	box.offset_top = 40.0
+	box.offset_bottom = 340.0
 	_intro.add_child(box)
 
 	var title := Label.new()
-	title.text = "PATANG"
+	title.text = Brand.TITLE
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 84)
-	title.add_theme_color_override("font_color", Color(1.0, 0.9, 0.62))
+	title.add_theme_font_override("font", Brand.display_font())
+	title.add_theme_font_size_override("font_size", 64)
+	title.add_theme_color_override("font_color", Brand.GOLD)
+	title.add_theme_color_override("font_outline_color", Brand.INK)
+	title.add_theme_constant_override("outline_size", 10)
 	_shadow(title)
 	box.add_child(title)
 
 	var tag := Label.new()
-	tag.text = "Rooftop Kite Fight"
+	tag.text = Brand.TAGLINE
 	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tag.add_theme_font_size_override("font_size", 24)
-	tag.add_theme_color_override("font_color", Color(0.96, 0.86, 0.74, 0.92))
+	tag.add_theme_font_override("font", Brand.body_font())
+	tag.add_theme_font_size_override("font_size", 22)
+	tag.add_theme_color_override("font_color", Brand.CREAM)
 	_shadow(tag)
 	box.add_child(tag)
 
 	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, 20)
+	spacer.custom_minimum_size = Vector2(0, 12)
 	box.add_child(spacer)
+
+	var pick := Label.new()
+	pick.text = "Choose who flies"
+	pick.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pick.add_theme_font_override("font", Brand.body_font())
+	pick.add_theme_font_size_override("font_size", 22)
+	pick.add_theme_color_override("font_color", Brand.GOLD)
+	_shadow(pick)
+	box.add_child(pick)
+	_char_label = pick
+
+	_char_row = HBoxContainer.new()
+	_char_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_char_row.add_theme_constant_override("separation", 18)
+	_char_row.mouse_filter = Control.MOUSE_FILTER_STOP
+	box.add_child(_char_row)
+	_char_row.add_child(_make_flyer_card("boy", "Boy", [
+		Color(0.42, 0.72, 0.42),
+		Color(0.82, 0.72, 0.42),
+		Color(0.95, 0.88, 0.70),
+	]))
+	_char_row.add_child(_make_flyer_card("girl", "Girl", [
+		Color(0.92, 0.42, 0.62),
+		Color(0.95, 0.90, 0.88),
+		Color(0.82, 0.18, 0.22),
+	]))
+
+	_mode_label = Label.new()
+	_mode_label.text = "Choose a mode"
+	_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mode_label.add_theme_font_override("font", Brand.body_font())
+	_mode_label.add_theme_font_size_override("font_size", 22)
+	_mode_label.add_theme_color_override("font_color", Brand.GOLD)
+	_shadow(_mode_label)
+	_mode_label.visible = false
+	box.add_child(_mode_label)
+
+	_mode_row = HBoxContainer.new()
+	_mode_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_mode_row.add_theme_constant_override("separation", 22)
+	_mode_row.mouse_filter = Control.MOUSE_FILTER_STOP
+	_mode_row.visible = false
+	box.add_child(_mode_row)
+	_mode_row.add_child(_make_mode_card(
+		"save",
+		"Save the kite",
+		"Rockets hunt your sail — dodge them. No rival.",
+		[Color(1.0, 0.42, 0.16), Color(1.0, 0.78, 0.28), Color(0.95, 0.90, 0.72)]
+	))
+	_mode_row.add_child(_make_mode_card(
+		"battle",
+		"Classic Kite Battle",
+		"Cut their manjha. First to 2 kaata. No rockets.",
+		[Color(0.38, 0.62, 0.95), Color(0.95, 0.82, 0.28), Color(0.92, 0.28, 0.48)]
+	))
+
+	var spacer2 := Control.new()
+	spacer2.custom_minimum_size = Vector2(0, 10)
+	box.add_child(spacer2)
 
 	_intro_prompt = Label.new()
 	_intro_prompt.text = "Press  SPACE  to fly"
 	_intro_prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_intro_prompt.add_theme_font_size_override("font_size", 28)
-	_intro_prompt.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
+	_intro_prompt.add_theme_font_override("font", Brand.display_font())
+	_intro_prompt.add_theme_font_size_override("font_size", 30)
+	_intro_prompt.add_theme_color_override("font_color", Brand.GOLD)
 	_shadow(_intro_prompt)
+	_intro_prompt.visible = false
 	box.add_child(_intro_prompt)
 
 
-func show_intro() -> void:
+func show_character_select() -> void:
 	if _intro == null:
 		return
+	if _title_card and _title_card.has_method("recede"):
+		_title_card.recede()
+	_show_chrome()
 	_intro_on = true
 	_intro_t = 0.0
 	_intro.visible = true
 	_intro.modulate.a = 0.0
+	if _char_row:
+		_char_row.visible = true
+	if _char_label:
+		_char_label.visible = true
+	if _mode_row:
+		_mode_row.visible = false
+	if _mode_label:
+		_mode_label.visible = false
+	if _intro_prompt:
+		_intro_prompt.visible = false
+
+
+func _show_chrome() -> void:
+	if _hud_chrome == null:
+		return
+	_hud_chrome.visible = true
+	var tw := create_tween()
+	tw.tween_property(_hud_chrome, "modulate:a", 1.0, 0.55)
+
+
+func _make_flyer_card(id: String, title: String, swatches: Array) -> Button:
+	var b := Button.new()
+	b.custom_minimum_size = Vector2(180, 148)
+	b.mouse_filter = Control.MOUSE_FILTER_STOP
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(func() -> void: _pick_character(id))
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.08, 0.07, 0.08, 0.92)
+	normal.border_color = Color(swatches[0].r, swatches[0].g, swatches[0].b, 0.55)
+	normal.set_border_width_all(2)
+	normal.set_corner_radius_all(12)
+	normal.content_margin_left = 12
+	normal.content_margin_right = 12
+	normal.content_margin_top = 12
+	normal.content_margin_bottom = 12
+	var hot := normal.duplicate() as StyleBoxFlat
+	hot.bg_color = Color(0.16, 0.12, 0.10, 0.96)
+	hot.border_color = Color(1.0, 0.84, 0.38, 1.0)
+	hot.set_border_width_all(3)
+	b.add_theme_stylebox_override("normal", normal)
+	b.add_theme_stylebox_override("hover", hot)
+	b.add_theme_stylebox_override("pressed", hot)
+	var col := VBoxContainer.new()
+	col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_theme_constant_override("separation", 8)
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	b.add_child(col)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 6)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(row)
+	for c in swatches:
+		var chip := ColorRect.new()
+		chip.custom_minimum_size = Vector2(28, 52)
+		chip.color = c
+		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(chip)
+	var name := Label.new()
+	name.text = title
+	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name.add_theme_font_override("font", Brand.body_font())
+	name.add_theme_font_size_override("font_size", 22)
+	name.add_theme_color_override("font_color", Brand.CREAM)
+	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(name)
+	return b
+
+
+func _make_mode_card(id: String, title: String, blurb: String, swatches: Array) -> VBoxContainer:
+	var wrap := VBoxContainer.new()
+	wrap.alignment = BoxContainer.ALIGNMENT_CENTER
+	wrap.add_theme_constant_override("separation", 8)
+	wrap.mouse_filter = Control.MOUSE_FILTER_STOP
+	var b := Button.new()
+	b.custom_minimum_size = Vector2(280, 132)
+	b.mouse_filter = Control.MOUSE_FILTER_STOP
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(func() -> void: _pick_mode(id))
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.08, 0.07, 0.08, 0.92)
+	normal.border_color = Color(swatches[0].r, swatches[0].g, swatches[0].b, 0.7)
+	normal.set_border_width_all(2)
+	normal.set_corner_radius_all(12)
+	normal.content_margin_left = 14
+	normal.content_margin_right = 14
+	normal.content_margin_top = 14
+	normal.content_margin_bottom = 14
+	var hot := normal.duplicate() as StyleBoxFlat
+	hot.bg_color = Color(0.16, 0.12, 0.10, 0.96)
+	hot.border_color = Color(1.0, 0.84, 0.38, 1.0)
+	hot.set_border_width_all(3)
+	b.add_theme_stylebox_override("normal", normal)
+	b.add_theme_stylebox_override("hover", hot)
+	b.add_theme_stylebox_override("pressed", hot)
+	var col := VBoxContainer.new()
+	col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_theme_constant_override("separation", 8)
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	b.add_child(col)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 6)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(row)
+	for c in swatches:
+		var chip := ColorRect.new()
+		chip.custom_minimum_size = Vector2(22, 40)
+		chip.color = c
+		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(chip)
+	var name := Label.new()
+	name.text = title
+	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	name.add_theme_font_override("font", Brand.display_font())
+	name.add_theme_font_size_override("font_size", 22)
+	name.add_theme_color_override("font_color", Brand.GOLD)
+	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(name)
+	wrap.add_child(b)
+	var desc := Label.new()
+	desc.text = blurb
+	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.custom_minimum_size = Vector2(280, 0)
+	desc.add_theme_font_override("font", Brand.body_font())
+	desc.add_theme_font_size_override("font_size", 15)
+	desc.add_theme_color_override("font_color", Brand.CREAM)
+	_shadow(desc)
+	wrap.add_child(desc)
+	return wrap
+
+
+func _pick_character(id: String) -> void:
+	character_chosen.emit(id)
+	if _char_row:
+		_char_row.visible = false
+	if _char_label:
+		_char_label.visible = false
+	if _mode_row:
+		_mode_row.visible = true
+	if _mode_label:
+		_mode_label.visible = true
+	if _intro_prompt:
+		_intro_prompt.visible = false
+
+
+func _pick_mode(id: String) -> void:
+	game_mode = id
+	mode_chosen.emit(id)
+	if _mode_row:
+		_mode_row.visible = false
+	if _mode_label:
+		_mode_label.visible = false
+	if _intro_prompt:
+		_intro_prompt.visible = true
+	_apply_mode_chrome()
 
 
 func hide_intro() -> void:
@@ -452,11 +751,25 @@ func _process(delta: float) -> void:
 	_update_charge_ui()
 
 
+func _apply_mode_chrome() -> void:
+	var save := game_mode == "save"
+	if _pip_row:
+		_pip_row.visible = true
+	if _pip_cap:
+		_pip_cap.visible = true
+		_pip_cap.text = "DODGE CHARGE" if save else "CUT CHARGE"
+	if _rocket_label and not save:
+		_rocket_label.modulate.a = 0.0
+
+
 func _update_charge_ui() -> void:
 	if kite == null:
 		return
 	if _score_label and pech:
-		_score_label.text = "You  %d    ·    Rival  %d    ·    first to 2" % [pech.player_wins, pech.rival_wins]
+		if game_mode == "save":
+			_score_label.text = "Save the kite    ·    dodge the rockets"
+		else:
+			_score_label.text = "You  %d    ·    Rival  %d    ·    first to 2" % [pech.player_wins, pech.rival_wins]
 	var n := kite.pips if kite else 0
 	var ready := kite.is_cut_ready() if kite.has_method("is_cut_ready") else n >= 3
 	var dash := kite.is_dashing() if kite.has_method("is_dashing") else false
@@ -468,16 +781,30 @@ func _update_charge_ui() -> void:
 			_pips[i].color = Color(1.0, 0.55, 0.28, 0.92)
 		else:
 			_pips[i].color = Color(0.22, 0.14, 0.12, 0.85)
-	if ready:
-		_pech_label.text = "CUT READY — aim through their string and Q"
-		_pech_label.modulate.a = 0.7 + 0.3 * absf(sin(Time.get_ticks_msec() * 0.01))
-	elif dash:
+	if game_mode == "save":
+		if ready:
+			_pech_label.text = "CUT READY — aim through their string and Q"
+			_pech_label.modulate.a = 0.7 + 0.3 * absf(sin(Time.get_ticks_msec() * 0.01))
+		elif dash:
+			_pech_label.text = "CUT DASH"
+			_pech_label.modulate.a = 1.0
+		return
+	if dash:
 		_pech_label.text = "CUT DASH"
 		_pech_label.modulate.a = 1.0
+	elif ready:
+		_pech_label.text = "CUT READY — through their string, then Q"
+		_pech_label.modulate.a = 0.7 + 0.3 * absf(sin(Time.get_ticks_msec() * 0.01))
+	elif pech and pech.active:
+		_pech_label.text = "PECH — Q to cut, E to slip"
+		_pech_label.modulate.a = 0.65 + 0.35 * absf(sin(Time.get_ticks_msec() * 0.008))
 
 
 func _update_rocket_badge() -> void:
 	if _rocket_label == null:
+		return
+	if game_mode == "battle":
+		_rocket_label.modulate.a = 0.0
 		return
 	var inbound := 0
 	if rockets and rockets.has_method("inbound_launches"):

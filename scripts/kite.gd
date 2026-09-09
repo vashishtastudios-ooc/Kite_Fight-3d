@@ -26,11 +26,15 @@ const IDLE_DRIFT_LO := 0.45        ## down-wind push at a taut line
 const IDLE_DRIFT_HI := 1.15        ## down-wind push when fully slack (a loose sail)
 const IDLE_HEIGHT_SPAN := 45.0     ## altitude over which the layer blend runs
 const IDLE_GROUND_SOFT := 9.0      ## metres over the deck where the sink eases off
-const LINE_SEGS := 16
-const TAIL_LEN := 10
-const TAIL_SEG := 0.28
+const LINE_SEGS := 28
+const TAIL_LEN := 18
+const TAIL_SEG := 0.24
 const KITE_SPAN := 1.55
 const KITE_SHADER := preload("res://shaders/kite.gdshader")
+const RIBBON_SHADER := preload("res://shaders/kite_ribbon.gdshader")
+const TRAIL_SHADER := preload("res://shaders/kite_trail.gdshader")
+const FLARE_SHADER := preload("res://shaders/rocket_flare.gdshader")
+const KiteSkins := preload("res://scripts/kite_skins.gd")
 const NOSE_MESH_H := 0.26
 
 signal cut_down
@@ -41,6 +45,8 @@ var killed_by_rocket: bool = false
 var pips: int = 0
 var dash_t: float = 0.0
 var steered_t: float = 0.0
+var fight_pips: bool = false
+var _fight_t: float = 0.0
 const PIPS_MAX := 3
 const DASH_TIME := 0.88
 
@@ -59,6 +65,7 @@ var spin_dir: float = 1.0
 var elevation: float = 0.0
 var manjha: float = 1.0
 var is_ai: bool = false
+var sail_id: String = KiteSkins.SAFFRON
 var viewer_pos: Vector3 = Vector3.ZERO
 var hand_pos: Vector3 = Vector3.ZERO
 ## Metres of line paid this second (firki + wind). HUD and spool use this.
@@ -77,6 +84,7 @@ var _cut_tumble: float = 0.0
 var _sail_colors: Array[Color] = []
 var _line_pink: bool = true
 var _sail_mat: ShaderMaterial
+var _model_mats: Array[StandardMaterial3D] = []
 var _outline_mi: MeshInstance3D
 var _outline_mat: StandardMaterial3D
 var _nose_marker: MeshInstance3D
@@ -85,23 +93,29 @@ var _body: Node3D
 var _line_root: Node3D
 var _line_segs: Array[MeshInstance3D] = []
 var _line_cyls: Array[CylinderMesh] = []
+var _line_glows: Array[MeshInstance3D] = []
+var _line_glow_cyls: Array[CylinderMesh] = []
 var _tail_pts: Array[Vector3] = []
-var _tail_meshes: Array[MeshInstance3D] = []
+var _tail_draw: MeshInstance3D
+var _tail_imm: ImmediateMesh
+var _ribbon_mat: ShaderMaterial
 var _visual_basis: Basis = Basis.IDENTITY
 var _line_mat: StandardMaterial3D
+var _line_glow_mat: StandardMaterial3D
 var _speed_burst: GPUParticles3D
 var _speed_trail: MeshInstance3D
 var _trail_imm: ImmediateMesh
-var _trail_mat: StandardMaterial3D
+var _trail_mat: ShaderMaterial
 var _trail_pts: Array[Vector3] = []
 var _trail_age: Array[float] = []
-const TRAIL_LIFE := 0.42
-const TRAIL_MAX := 28
+const TRAIL_LIFE := 0.58
+const TRAIL_MAX := 44
 
 
-func setup(wind_in: WindSys, city_in: CityGen, colors: Array[Color] = []) -> void:
+func setup(wind_in: WindSys, city_in: CityGen, colors: Array[Color] = [], skin: String = "") -> void:
 	wind = wind_in
 	city = city_in
+	sail_id = KiteSkins.clamp_id(skin) if skin != "" else KiteSkins.SAFFRON
 	if colors.is_empty():
 		_sail_colors = [
 			Color(0.90, 0.16, 0.12),
@@ -262,6 +276,10 @@ func is_dashing() -> bool:
 	return dash_t > 0.0
 
 
+func is_kheenching() -> bool:
+	return _kheench
+
+
 func is_cut_ready() -> bool:
 	return pips >= PIPS_MAX and dash_t <= 0.0
 
@@ -327,6 +345,8 @@ func tick(delta: float, hand: Vector3, viewer: Vector3, reel: float, bias: float
 
 	# Dheel pays line out. Wind taking the kite also lengthens the manjha.
 	payout_rate = 0.0
+	if fight_pips:
+		_tick_fight_pips(delta)
 	var w := _wind_at(global_position)
 	if _dheel:
 		var wind_out := Vector3(w.x, 0.0, w.z).length() * 2.2
@@ -396,6 +416,23 @@ func _idle_spin_rate() -> float:
 
 func altitude() -> float:
 	return global_position.y - hand_pos.y
+
+
+func _tick_fight_pips(delta: float) -> void:
+	if not is_airborne() or phase == Phase.CUT or pips >= PIPS_MAX:
+		return
+	if altitude() < 12.0 or slack > 0.42:
+		_fight_t = maxf(0.0, _fight_t - delta * 0.6)
+		return
+	var rate := 0.48
+	if _kheench:
+		rate = 0.95
+	elif phase == Phase.FLY:
+		rate = 0.72
+	_fight_t += delta * rate
+	if _fight_t >= 5.4:
+		_fight_t = 0.0
+		add_pip()
 
 
 func horiz_dist() -> float:
@@ -650,6 +687,15 @@ func _update_readability() -> void:
 			_sail_mat.set_shader_parameter("rim_color", Color(1.0, 0.72, 0.38))
 		else:
 			_sail_mat.set_shader_parameter("rim_color", Color(1.0, 0.84, 0.28) if is_ai else Color(1.0, 0.84, 0.28))
+	var glow := Color(1.0, 0.84, 0.28)
+	if heat > 0.6:
+		glow = Color(1.0, 0.32, 0.72)
+	elif heat > 0.04:
+		glow = Color(1.0, 0.72, 0.38)
+	for mat in _model_mats:
+		mat.emission_enabled = true
+		mat.emission = glow
+		mat.emission_energy_multiplier = maxf(far * 0.22, heat * 1.35)
 	if _outline_mat:
 		_outline_mat.albedo_color.a = lerpf(0.22, 0.72, far)
 		_outline_mat.emission_energy_multiplier = lerpf(0.12, 1.15, far)
@@ -685,41 +731,65 @@ func _update_line() -> void:
 		mid += wf.normalized() * (length * 0.02 * slack)
 	if _line_mat:
 		if _line_pink:
-			_line_mat.albedo_color = Color(0.92, 0.22, 0.48).lerp(Color(1.0, 0.48, 0.70), taut)
+			_line_mat.albedo_color = Color(1.0, 0.42, 0.72).lerp(Color(1.0, 0.78, 0.92), taut)
 		else:
-			_line_mat.albedo_color = Color(0.93, 0.88, 0.7).lerp(Color(1.0, 0.92, 0.45), taut)
+			_line_mat.albedo_color = Color(1.0, 0.88, 0.42).lerp(Color(1.0, 0.96, 0.72), taut)
+		_line_mat.emission = _line_mat.albedo_color
+		_line_mat.emission_energy_multiplier = lerpf(1.8, 2.8, taut)
+	if _line_glow_mat:
+		_line_glow_mat.albedo_color = Color(_line_mat.albedo_color, 0.22)
+		_line_glow_mat.emission = _line_mat.albedo_color
+		_line_glow_mat.emission_energy_multiplier = lerpf(1.4, 2.2, taut)
+	## Thin thread that still reads at dusk — not a neon beam.
+	var dist_cam := viewer_pos.distance_to((a + b) * 0.5)
+	var r_hand := clampf(dist_cam * 0.000192, 0.00312, 0.009)
+	var r_kite := clampf(dist_cam * 0.000144, 0.0024, 0.00696)
 	for i in LINE_SEGS:
 		var t0 := float(i) / float(LINE_SEGS)
 		var t1 := float(i + 1) / float(LINE_SEGS)
-		_place_segment(_line_segs[i], _line_cyls[i], _bezier(a, mid, b, t0), _bezier(a, mid, b, t1), lerpf(0.0045 if _line_pink else 0.003, 0.012 if _line_pink else 0.01, t1))
+		var p0 := _bezier(a, mid, b, t0)
+		var p1 := _bezier(a, mid, b, t1)
+		var radius := lerpf(r_hand, r_kite, t1)
+		_place_segment(_line_segs[i], _line_cyls[i], p0, p1, radius)
+		if i < _line_glows.size():
+			_place_segment(_line_glows[i], _line_glow_cyls[i], p0, p1, radius * 1.7)
+
+
+func _tail_anchor() -> Vector3:
+	## Rear vertex of the sail in flight axes (local -Z).
+	if _body:
+		return _body.to_global(Vector3(0.0, 0.0, -KITE_SPAN * 0.50))
+	return global_position - nose_dir() * (KITE_SPAN * 0.50)
 
 
 func _update_tail(delta: float) -> void:
 	if _tail_pts.is_empty():
 		return
-	var back := -nose_dir()
-	var desired := global_position + back * 0.5 + Vector3.DOWN * 0.1
-	_tail_pts[0] = _tail_pts[0].lerp(desired, clampf(16.0 * delta, 0.0, 1.0))
-	var w := _wind_at(global_position) * 0.1
+	var anchor := _tail_anchor()
+	_tail_pts[0] = anchor
+	var w := _wind_at(global_position)
+	var hang := Vector3.DOWN * 4.2 + Vector3(w.x, 0.0, w.z) * 0.22
+	var side := _visual_basis.x
+	if side.length_squared() < 0.01:
+		side = Vector3.RIGHT
+	side = side.normalized()
 	for i in range(1, _tail_pts.size()):
 		var prev: Vector3 = _tail_pts[i - 1]
-		var cur: Vector3 = _tail_pts[i] + (w + Vector3.DOWN * 2.2) * delta
+		var flutter := sin(_bob_t * 8.5 + float(i) * 0.72) * 0.55
+		var cur: Vector3 = _tail_pts[i] + (hang + side * flutter) * delta
 		var to := cur - prev
 		if to.length() < 0.001:
-			to = Vector3.DOWN
+			to = Vector3.DOWN + -nose_dir() * 0.2
 		_tail_pts[i] = prev + to.normalized() * TAIL_SEG
-	for i in _tail_meshes.size():
-		var m: MeshInstance3D = _tail_meshes[i]
-		m.global_position = _tail_pts[i]
-		if i > 0:
-			var dir: Vector3 = _tail_pts[i] - _tail_pts[i - 1]
-			if dir.length_squared() > 0.0002 and absf(dir.normalized().dot(Vector3.UP)) < 0.97:
-				m.look_at(_tail_pts[i - 1], Vector3.UP)
+	_rebuild_tail_mesh()
 
 
 func _reset_tail() -> void:
+	var anchor := _tail_anchor() if _body else global_position
+	var back := -nose_dir()
 	for i in _tail_pts.size():
-		_tail_pts[i] = global_position + Vector3.DOWN * (0.4 + float(i) * TAIL_SEG)
+		_tail_pts[i] = anchor + (back * 0.15 + Vector3.DOWN * 0.85) * float(i) * TAIL_SEG
+	_rebuild_tail_mesh()
 
 
 func _wind_at(pos: Vector3) -> Vector3:
@@ -745,6 +815,98 @@ func _build_visual() -> void:
 	_body.name = "Sail"
 	add_child(_body)
 	var accent := _rim_accent()
+	var used_glb := _attach_glb_sail()
+	if not used_glb:
+		_build_diamond_sail(accent)
+		_add_nose_marker(accent)
+	_build_tail()
+	_build_line()
+	_build_speed_fx()
+	_reset_tail()
+
+
+func set_sail(id: String) -> void:
+	sail_id = KiteSkins.clamp_id(id)
+	if _body == null:
+		return
+	for c in _body.get_children():
+		if c == _speed_burst or c == _nose_marker:
+			continue
+		_body.remove_child(c)
+		c.free()
+	_model_mats.clear()
+	_sail_mat = null
+	_outline_mi = null
+	_outline_mat = null
+	if not _attach_glb_sail():
+		_build_diamond_sail(_rim_accent())
+	_rebuild_tail_mesh()
+
+
+func _attach_glb_sail() -> bool:
+	var scene := KiteSkins.scene_for(sail_id)
+	if scene == null:
+		return false
+	var model := scene.instantiate() as Node3D
+	if model == null:
+		return false
+	model.name = "Model"
+	_body.add_child(model)
+	## GLB stands in XY (Y = nose). Flight axes: +Z nose, +X span, +Y face.
+	model.rotation_degrees = Vector3(-90.0, 180.0, 0.0)
+	model.force_update_transform()
+	var aabb := _world_aabb(model)
+	var longest := maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
+	if longest < 0.05:
+		longest = 1.0
+	model.scale *= KITE_SPAN / longest
+	model.force_update_transform()
+	aabb = _world_aabb(model)
+	model.global_position += _body.global_position - aabb.get_center()
+	_unique_sail_mats(model)
+	return true
+
+
+func _unique_sail_mats(n: Node) -> void:
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		mi.extra_cull_margin = 16.0
+		var surf_count := mi.mesh.get_surface_count() if mi.mesh else 0
+		for s in surf_count:
+			var src := mi.get_active_material(s)
+			if src == null:
+				continue
+			var mat := src.duplicate() as Material
+			if mat is StandardMaterial3D:
+				var sm := mat as StandardMaterial3D
+				sm.cull_mode = BaseMaterial3D.CULL_DISABLED
+				sm.emission_enabled = true
+				_model_mats.append(sm)
+			mi.set_surface_override_material(s, mat)
+	for c in n.get_children():
+		_unique_sail_mats(c)
+
+
+func _world_aabb(n: Node) -> AABB:
+	var acc := AABB()
+	var first := true
+	if n is VisualInstance3D:
+		acc = (n as Node3D).global_transform * (n as VisualInstance3D).get_aabb()
+		first = false
+	for c in n.get_children():
+		var sub := _world_aabb(c)
+		if sub.size.length_squared() < 0.0001:
+			continue
+		if first:
+			acc = sub
+			first = false
+		else:
+			acc = acc.merge(sub)
+	return acc
+
+
+func _build_diamond_sail(accent: Color) -> void:
 	var sail := MeshInstance3D.new()
 	sail.mesh = _make_diamond()
 	sail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
@@ -776,6 +938,9 @@ func _build_visual() -> void:
 	_body.add_child(_outline_mi)
 	_add_spar(Vector3(0.0, 0.0, 0.0), Vector3(0.0, 0.0, 1.0), KITE_SPAN, 0.016)
 	_add_spar(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.0, 0.0), 1.15, 0.014)
+
+
+func _add_nose_marker(accent: Color) -> void:
 	_nose_marker = MeshInstance3D.new()
 	var cone := CylinderMesh.new()
 	cone.top_radius = 0.002
@@ -798,53 +963,42 @@ func _build_visual() -> void:
 	_nose_marker.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
 	_nose_marker.position = Vector3(0.0, 0.0, KITE_SPAN * 0.48)
 	_body.add_child(_nose_marker)
-	_build_tail()
-	_build_line()
-	_build_speed_fx()
-	_reset_tail()
 
 
 func _build_speed_fx() -> void:
-	var glow := StandardMaterial3D.new()
-	glow.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	glow.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	glow.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	glow.albedo_color = Color(1.0, 0.93, 0.5, 0.85)
-	glow.vertex_color_use_as_albedo = true
-	glow.disable_receive_shadows = true
-	glow.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var spark := BoxMesh.new()
-	spark.size = Vector3(0.035, 0.42, 0.035)
-	spark.material = glow
+	var flare := ShaderMaterial.new()
+	flare.shader = FLARE_SHADER
+	var spark := QuadMesh.new()
+	spark.size = Vector2(0.22, 0.22)
+	spark.material = flare
 
 	_speed_burst = GPUParticles3D.new()
 	_speed_burst.name = "KheenchBurst"
-	_speed_burst.amount = 14
-	_speed_burst.lifetime = 0.28
-	_speed_burst.one_shot = true
-	_speed_burst.explosiveness = 1.0
-	_speed_burst.local_coords = false
+	_speed_burst.amount = 22
+	_speed_burst.lifetime = 0.38
+	_speed_burst.one_shot = false
+	_speed_burst.explosiveness = 0.15
+	_speed_burst.local_coords = true
 	_speed_burst.emitting = false
 	_speed_burst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_speed_burst.visibility_aabb = AABB(Vector3(-50.0, -50.0, -50.0), Vector3(100.0, 100.0, 100.0))
+	_speed_burst.visibility_aabb = AABB(Vector3(-80.0, -80.0, -80.0), Vector3(160.0, 160.0, 160.0))
 	_speed_burst.extra_cull_margin = 40.0
 	var bpm := ParticleProcessMaterial.new()
 	bpm.direction = Vector3(0.0, 0.0, -1.0)
-	bpm.spread = 14.0
-	bpm.initial_velocity_min = 6.0
-	bpm.initial_velocity_max = 12.0
+	bpm.spread = 9.0
+	bpm.initial_velocity_min = 4.0
+	bpm.initial_velocity_max = 11.0
 	bpm.gravity = Vector3.ZERO
-	bpm.damping_min = 4.0
-	bpm.damping_max = 7.0
-	bpm.scale_min = 0.55
-	bpm.scale_max = 1.0
-	bpm.particle_flag_align_y = true
+	bpm.damping_min = 3.0
+	bpm.damping_max = 6.0
+	bpm.scale_min = 0.35
+	bpm.scale_max = 0.85
 	var grad := Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.65, 1.0])
+	grad.offsets = PackedFloat32Array([0.0, 0.35, 1.0])
 	grad.colors = PackedColorArray([
-		Color(1.0, 0.94, 0.5, 0.8),
-		Color(1.0, 0.88, 0.42, 0.35),
-		Color(1.0, 0.82, 0.35, 0.0),
+		Color(1.0, 0.97, 0.82, 0.95),
+		Color(1.0, 0.72, 0.28, 0.55),
+		Color(1.0, 0.35, 0.12, 0.0),
 	])
 	var ramp := GradientTexture1D.new()
 	ramp.gradient = grad
@@ -852,19 +1006,15 @@ func _build_speed_fx() -> void:
 	_speed_burst.process_material = bpm
 	_speed_burst.draw_pass_1 = spark
 	_body.add_child(_speed_burst)
-	_speed_burst.position = Vector3(0.0, 0.0, -0.55)
+	_speed_burst.position = Vector3(0.0, 0.0, -KITE_SPAN * 0.50)
 
-	_trail_mat = StandardMaterial3D.new()
-	_trail_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_trail_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_trail_mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	_trail_mat.vertex_color_use_as_albedo = true
-	_trail_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_trail_mat.disable_receive_shadows = true
+	_trail_mat = ShaderMaterial.new()
+	_trail_mat.shader = TRAIL_SHADER
 	_trail_imm = ImmediateMesh.new()
 	_speed_trail = MeshInstance3D.new()
 	_speed_trail.name = "KheenchTrail"
 	_speed_trail.mesh = _trail_imm
+	_speed_trail.material_override = _trail_mat
 	_speed_trail.top_level = true
 	_speed_trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_speed_trail.extra_cull_margin = 80.0
@@ -890,9 +1040,12 @@ func _update_speed_trail(delta: float) -> void:
 			_trail_age.remove_at(i)
 		else:
 			i += 1
-	if _kheench and phase == Phase.FLY:
-		var p := global_position
-		if _trail_pts.is_empty() or _trail_pts[_trail_pts.size() - 1].distance_squared_to(p) > 0.018:
+	var darting := (_kheench and phase == Phase.FLY) or dash_t > 0.0
+	if _speed_burst:
+		_speed_burst.emitting = darting
+	if darting:
+		var p := _tail_anchor()
+		if _trail_pts.is_empty() or _trail_pts[_trail_pts.size() - 1].distance_squared_to(p) > 0.012:
 			_trail_pts.append(p)
 			_trail_age.append(0.0)
 			while _trail_pts.size() > TRAIL_MAX:
@@ -907,7 +1060,14 @@ func _rebuild_trail_mesh() -> void:
 	if n < 2:
 		return
 	var dist := viewer_pos.distance_to(global_position)
-	var half_w := clampf(dist * 0.002, 0.06, 0.55)
+	var core_w := clampf(dist * 0.00035, 0.018, 0.055)
+	var glow_w := core_w * 3.2
+	_add_trail_strip(glow_w, Color(1.0, 0.55, 0.12, 0.22), 0.55)
+	_add_trail_strip(core_w, Color(1.0, 0.96, 0.78, 0.85), 1.0)
+
+
+func _add_trail_strip(half_w: float, tint: Color, alpha_mul: float) -> void:
+	var n := _trail_pts.size()
 	_trail_imm.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP, _trail_mat)
 	for idx in n:
 		var p: Vector3 = _trail_pts[idx]
@@ -917,24 +1077,21 @@ func _rebuild_trail_mesh() -> void:
 		else:
 			along = p - _trail_pts[idx - 1]
 		if along.length_squared() < 0.00001:
-			along = velocity
-		if along.length_squared() < 0.00001:
-			along = Vector3(0.0, 0.0, -1.0)
+			along = velocity if velocity.length_squared() > 0.00001 else Vector3(0.0, 0.0, -1.0)
 		along = along.normalized()
 		var to_cam := viewer_pos - p
 		var side := along.cross(to_cam)
 		if side.length_squared() < 0.05:
 			side = along.cross(Vector3.UP)
 		if side.length_squared() < 0.0001:
-			side = along.cross(Vector3.RIGHT)
-		if side.length_squared() < 0.0001:
 			side = Vector3.RIGHT
-		var u := float(idx) / float(n - 1)
-		var t := 1.0 - clampf(_trail_age[idx] / TRAIL_LIFE, 0.0, 1.0)
-		var half := half_w * lerpf(0.18, 1.0, u)
+		var u := float(idx) / float(maxi(n - 1, 1))
+		var age_t := 1.0 - clampf(_trail_age[idx] / TRAIL_LIFE, 0.0, 1.0)
+		## Newest (at the kite, u=1) stays tight. Oldest tapers to a point.
+		var half := half_w * lerpf(0.08, 1.0, u * u)
 		side = side.normalized() * half
-		var a := clampf(t * lerpf(0.08, 0.55, u), 0.0, 0.55)
-		var col := Color(1.0, 0.93, 0.48, a)
+		var a := tint.a * alpha_mul * age_t * lerpf(0.15, 1.0, u)
+		var col := Color(tint.r, tint.g, tint.b, clampf(a, 0.0, 1.0))
 		_trail_imm.surface_set_color(col)
 		_trail_imm.surface_add_vertex(p + side)
 		_trail_imm.surface_set_color(col)
@@ -946,6 +1103,7 @@ func _burst_speed_fx() -> void:
 	if _speed_burst == null:
 		return
 	_speed_burst.restart()
+	_speed_burst.emitting = true
 
 
 func _make_diamond() -> ArrayMesh:
@@ -1019,46 +1177,129 @@ func _add_spar(origin: Vector3, axis: Vector3, length: float, radius: float) -> 
 	_body.add_child(mi)
 
 
+func _rebuild_tail_mesh() -> void:
+	if _tail_imm == null or _tail_draw == null:
+		return
+	_tail_draw.global_transform = Transform3D.IDENTITY
+	_tail_imm.clear_surfaces()
+	var n := _tail_pts.size()
+	if n < 3:
+		return
+	var sw := KiteSkins.swatches_for(sail_id)
+	var red: Color = sw[0]
+	var gold: Color = sw[2] if sw.size() > 2 else Color(1.0, 0.78, 0.18)
+	var cream := Color(0.98, 0.93, 0.82)
+	var specs: Array = [
+		{"off": 0.0, "w": 0.085, "col": gold, "cut": 0},
+		{"off": -0.045, "w": 0.055, "col": red, "cut": 2},
+		{"off": 0.045, "w": 0.048, "col": cream, "cut": 3},
+	]
+	for spec in specs:
+		var last := n - 1 - int(spec["cut"])
+		if last < 2:
+			continue
+		_tail_imm.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP, _ribbon_mat)
+		for i in (last + 1):
+			var p: Vector3 = _tail_pts[i]
+			var along: Vector3
+			if i < last:
+				along = _tail_pts[i + 1] - p
+			else:
+				along = p - _tail_pts[i - 1]
+			if along.length_squared() < 0.00001:
+				along = Vector3.DOWN
+			along = along.normalized()
+			var side := along.cross(Vector3.UP)
+			if side.length_squared() < 0.0002:
+				side = along.cross(_visual_basis.x if _visual_basis.x.length_squared() > 0.01 else Vector3.RIGHT)
+			side = side.normalized()
+			var u := float(i) / float(last)
+			var half: float = float(spec["w"]) * lerpf(1.0, 0.12, u)
+			var lat: float = float(spec["off"]) * lerpf(1.0, 0.25, u)
+			p += side * lat
+			var a := lerpf(0.95, 0.08, u * u)
+			var col: Color = spec["col"]
+			col.a = a
+			_tail_imm.surface_set_color(col)
+			_tail_imm.surface_add_vertex(p + side * half)
+			_tail_imm.surface_set_color(col)
+			_tail_imm.surface_add_vertex(p - side * half)
+		_tail_imm.surface_end()
+
+
 func _build_tail() -> void:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = _sail_colors[0] if not _sail_colors.is_empty() else Color(0.92, 0.18, 0.14)
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.roughness = 0.7
-	for i in TAIL_LEN:
+	_ribbon_mat = ShaderMaterial.new()
+	_ribbon_mat.shader = RIBBON_SHADER
+	_tail_imm = ImmediateMesh.new()
+	_tail_draw = MeshInstance3D.new()
+	_tail_draw.name = "PatangTail"
+	_tail_draw.mesh = _tail_imm
+	_tail_draw.material_override = _ribbon_mat
+	_tail_draw.top_level = true
+	_tail_draw.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_tail_draw.extra_cull_margin = 40.0
+	add_child(_tail_draw)
+	_tail_pts.clear()
+	for _i in TAIL_LEN:
 		_tail_pts.append(Vector3.ZERO)
-		var bead := MeshInstance3D.new()
-		var bm := BoxMesh.new()
-		var w := lerpf(0.16, 0.05, float(i) / float(TAIL_LEN))
-		bm.size = Vector3(w, 0.015, TAIL_SEG * 0.85)
-		bead.mesh = bm
-		bead.material_override = mat
-		bead.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(bead)
-		_tail_meshes.append(bead)
 
 
 func _build_line() -> void:
 	_line_root = Node3D.new()
 	_line_root.name = "Manjha"
+	_line_root.top_level = true
 	add_child(_line_root)
 	_line_mat = StandardMaterial3D.new()
-	_line_mat.albedo_color = Color(0.92, 0.22, 0.48) if _line_pink else Color(0.93, 0.88, 0.7)
+	_line_mat.albedo_color = Color(1.0, 0.42, 0.72) if _line_pink else Color(1.0, 0.88, 0.42)
 	_line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_line_mat.disable_receive_shadows = true
 	_line_mat.disable_fog = true
+	_line_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_line_mat.emission_enabled = true
+	_line_mat.emission = _line_mat.albedo_color
+	_line_mat.emission_energy_multiplier = 2.2
+	_line_glow_mat = StandardMaterial3D.new()
+	_line_glow_mat.albedo_color = Color(_line_mat.albedo_color, 0.22)
+	_line_glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_line_glow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_line_glow_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_line_glow_mat.disable_receive_shadows = true
+	_line_glow_mat.disable_fog = true
+	_line_glow_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_line_glow_mat.emission_enabled = true
+	_line_glow_mat.emission = _line_mat.albedo_color
+	_line_glow_mat.emission_energy_multiplier = 1.8
+	_line_glow_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_line_glow_mat.render_priority = 1
 	for i in LINE_SEGS:
 		var cyl := CylinderMesh.new()
-		cyl.top_radius = 0.006
-		cyl.bottom_radius = 0.006
+		cyl.top_radius = 0.0042
+		cyl.bottom_radius = 0.0042
 		cyl.height = 1.0
-		cyl.radial_segments = 5
+		cyl.radial_segments = 6
 		var mi := MeshInstance3D.new()
 		mi.mesh = cyl
 		mi.material_override = _line_mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.extra_cull_margin = 80.0
+		mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 		_line_root.add_child(mi)
 		_line_segs.append(mi)
 		_line_cyls.append(cyl)
+		var glow_cyl := CylinderMesh.new()
+		glow_cyl.top_radius = 0.0072
+		glow_cyl.bottom_radius = 0.0072
+		glow_cyl.height = 1.0
+		glow_cyl.radial_segments = 8
+		var glow_mi := MeshInstance3D.new()
+		glow_mi.mesh = glow_cyl
+		glow_mi.material_override = _line_glow_mat
+		glow_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		glow_mi.extra_cull_margin = 80.0
+		glow_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		_line_root.add_child(glow_mi)
+		_line_glows.append(glow_mi)
+		_line_glow_cyls.append(glow_cyl)
 
 
 func _bezier(p0: Vector3, p1: Vector3, p2: Vector3, t: float) -> Vector3:

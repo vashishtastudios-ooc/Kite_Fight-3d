@@ -3,7 +3,9 @@ extends Node3D
 
 const RocketSc := preload("res://scripts/diwali_rocket.gd")
 const MAX_LIVE := 3
+signal player_dodged
 
+var enabled: bool = true
 var _kite: Node
 var _city: Node
 var _wait: float = 2.4
@@ -24,6 +26,8 @@ func inbound_launches() -> Array[Vector3]:
 
 
 func _process(delta: float) -> void:
+	if not enabled:
+		return
 	if _kite == null or _city == null:
 		return
 	_wait -= delta
@@ -75,6 +79,7 @@ func _spawn_from(pad: Vector3, aim: Vector3) -> void:
 func _on_resolved(_hit: bool, dodged: bool) -> void:
 	if dodged and _kite and _kite.has_method("add_pip"):
 		_kite.add_pip()
+		player_dodged.emit()
 
 
 func _pick_pad(used: Array[Vector3]) -> Vector3:
