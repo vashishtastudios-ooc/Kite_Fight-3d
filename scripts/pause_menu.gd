@@ -5,6 +5,7 @@ const SettingsSc := preload("res://scripts/game_settings.gd")
 const KiteSkins := preload("res://scripts/kite_skins.gd")
 const Brand := preload("res://scripts/brand.gd")
 const ProfileSc := preload("res://scripts/profile.gd")
+const TitleMarkSc := preload("res://scripts/title_mark.gd")
 
 signal quit_requested
 signal settings_changed
@@ -205,10 +206,14 @@ func _build() -> void:
 	add_child(center)
 
 	_pause_box = _make_card()
+	_pause_box.custom_minimum_size = Vector2(520, 0)
 	center.add_child(_pause_box)
 	var pause_col := _vbox(_pause_box)
-	pause_col.add_child(_title(Brand.TITLE))
-	pause_col.add_child(_caption(Brand.TAGLINE))
+	var mark := TitleMarkSc.new()
+	mark.mark_scale = 0.52
+	mark.show_tag = true
+	mark.lively = true
+	pause_col.add_child(mark)
 	_pause_rank = _caption("Rookie")
 	_pause_rank.add_theme_color_override("font_color", Brand.GOLD)
 	pause_col.add_child(_pause_rank)

@@ -10,8 +10,8 @@ config_version=5
 
 [application]
 
-config/name="Patangbaz"
-config/description="Dusk rooftop kite fight. Cut the dusk."
+config/name="KITE BATTLE 3D"
+config/description="Patangbaaz — dusk rooftop kite fight."
 config/version="0.1.0"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")

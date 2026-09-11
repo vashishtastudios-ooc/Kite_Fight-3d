@@ -158,7 +158,7 @@ func _ready() -> void:
 	_snap_camera_to_sky()
 	_setup_intro_cam()
 	_spawn_title_kite()
-	print("Patangbaz rooftop ready. Buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
+	print("Kite Battle 3d rooftop ready. Buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
 
 
 func _setup_kite_cams() -> void:

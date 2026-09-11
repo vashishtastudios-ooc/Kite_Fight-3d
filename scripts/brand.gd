@@ -1,7 +1,7 @@
 extends RefCounted
 
-const TITLE := "PATANGBAZ"
-const TAGLINE := "Kite Battle 3d"
+const TITLE := "KITE BATTLE 3D"
+const TAGLINE := "Patangbaaz"
 const SUBTITLE := "Rooftop kite fight"
 
 const GOLD := Color(1.0, 0.84, 0.38)
@@ -21,6 +21,21 @@ static func display_font() -> SystemFont:
 		"Times New Roman",
 	])
 	f.font_weight = 800
+	return f
+
+
+static func mark_font() -> SystemFont:
+	var f := SystemFont.new()
+	f.font_names = PackedStringArray([
+		"Segoe UI Black",
+		"Arial Black",
+		"Impact",
+		"Bahnschrift",
+		"Franklin Gothic Heavy",
+		"Tahoma",
+	])
+	f.font_weight = 900
+	f.font_stretch = 72
 	return f
 
 

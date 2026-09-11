@@ -8,6 +8,7 @@ const PauseSc := preload("res://scripts/pause_menu.gd")
 const KiteSkins := preload("res://scripts/kite_skins.gd")
 const Brand := preload("res://scripts/brand.gd")
 const TitleCardSc := preload("res://scripts/title_card.gd")
+const TitleMarkSc := preload("res://scripts/title_mark.gd")
 const ProfileSc := preload("res://scripts/profile.gd")
 const ProfileCardSc := preload("res://scripts/profile_card.gd")
 
@@ -399,29 +400,15 @@ func _build_intro(root: Control) -> void:
 	box.offset_left = -520.0
 	box.offset_right = 520.0
 	## Sit the block in the lower third so the sky and the kite read above it.
-	box.offset_top = 40.0
-	box.offset_bottom = 340.0
+	box.offset_top = 10.0
+	box.offset_bottom = 420.0
 	_intro.add_child(box)
 
-	var title := Label.new()
-	title.text = Brand.TITLE
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_override("font", Brand.display_font())
-	title.add_theme_font_size_override("font_size", 64)
-	title.add_theme_color_override("font_color", Brand.GOLD)
-	title.add_theme_color_override("font_outline_color", Brand.INK)
-	title.add_theme_constant_override("outline_size", 10)
-	_shadow(title)
-	box.add_child(title)
-
-	var tag := Label.new()
-	tag.text = Brand.TAGLINE
-	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tag.add_theme_font_override("font", Brand.body_font())
-	tag.add_theme_font_size_override("font_size", 22)
-	tag.add_theme_color_override("font_color", Brand.CREAM)
-	_shadow(tag)
-	box.add_child(tag)
+	var mark := TitleMarkSc.new()
+	mark.mark_scale = 1.0
+	mark.show_tag = true
+	mark.lively = true
+	box.add_child(mark)
 
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 12)
