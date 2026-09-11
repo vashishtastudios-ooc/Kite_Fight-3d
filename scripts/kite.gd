@@ -303,6 +303,41 @@ func is_airborne() -> bool:
 	return phase != Phase.GROUNDED and phase != Phase.CRASHED
 
 
+func pack_net() -> Dictionary:
+	var p := global_position
+	var v := velocity
+	var h := hand_pos
+	return {
+		"t": "state",
+		"px": p.x, "py": p.y, "pz": p.z,
+		"vx": v.x, "vy": v.y, "vz": v.z,
+		"hx": h.x, "hy": h.y, "hz": h.z,
+		"line": line_length,
+		"phase": int(phase),
+		"slack": slack,
+		"heading": heading,
+		"dash": dash_t,
+		"pips": pips,
+	}
+
+
+func apply_net(d: Dictionary, delta: float) -> void:
+	global_position = Vector3(float(d.get("px", 0.0)), float(d.get("py", 0.0)), float(d.get("pz", 0.0)))
+	velocity = Vector3(float(d.get("vx", 0.0)), float(d.get("vy", 0.0)), float(d.get("vz", 0.0)))
+	hand_pos = Vector3(float(d.get("hx", 0.0)), float(d.get("hy", 0.0)), float(d.get("hz", 0.0)))
+	line_length = float(d.get("line", line_length))
+	phase = int(d.get("phase", phase)) as Phase
+	slack = float(d.get("slack", slack))
+	heading = float(d.get("heading", heading))
+	dash_t = float(d.get("dash", 0.0))
+	pips = int(d.get("pips", pips))
+	visible = true
+	_orient_body(delta)
+	_update_readability()
+	_update_line()
+	_update_tail(delta)
+
+
 func tick(delta: float, hand: Vector3, viewer: Vector3, reel: float, bias: float) -> void:
 	hand_pos = hand
 	viewer_pos = viewer

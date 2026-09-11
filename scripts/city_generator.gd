@@ -154,6 +154,14 @@ func rival_hand_position() -> Vector3:
 	return Vector3(24.5, 17.4, 90.0)
 
 
+func rival_roof_bounds() -> Rect2:
+	if rival_roof_aabb.size.length_squared() > 1.0:
+		var p := rival_roof_aabb.position
+		var s := rival_roof_aabb.size
+		return Rect2(p.x + 0.4, p.z + 0.4, maxf(4.0, s.x - 0.8), maxf(4.0, s.z - 0.8))
+	return Rect2(22.0, 86.0, 8.0, 10.0)
+
+
 func nearest_building_chop(pos: Vector3) -> float:
 	var chop := 0.0
 	for aabb in building_aabbs:

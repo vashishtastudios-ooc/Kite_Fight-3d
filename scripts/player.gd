@@ -45,6 +45,12 @@ func capture_mouse() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
+func move_to_roof(pos: Vector3, bounds: Rect2) -> void:
+	global_position = pos
+	rooftop_y = pos.y
+	rooftop_bounds = bounds
+
+
 func setup_avatar(id: String = "boy") -> void:
 	body_id = "girl" if id == "girl" else "boy"
 	if handle and handle.get_parent() != null and handle.get_parent() != head:

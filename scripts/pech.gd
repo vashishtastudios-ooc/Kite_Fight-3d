@@ -4,10 +4,12 @@ extends Node
 
 signal pech_changed(active: bool)
 signal kaata(player_won: bool, at: Vector3)
+signal cut_wanted(player_won: bool)
 
 const KiteSc := preload("res://scripts/kite.gd")
 
 var active: bool = false
+var net_mode: bool = false
 var contact_pos: Vector3 = Vector3.ZERO
 var pech_time: float = 0.0
 var player_wins: int = 0
@@ -90,6 +92,9 @@ func _resolve_dash(player_swings: bool, attacker: KiteSc, defender: KiteSc, pts:
 	if defender.is_slack_for_cut() and pts["dist"] > 1.05:
 		return
 	_lock = true
+	if net_mode:
+		cut_wanted.emit(player_swings)
+		return
 	defender.apply_cut()
 	if player_swings:
 		player_wins += 1

@@ -4,12 +4,14 @@ extends Control
 const SettingsSc := preload("res://scripts/game_settings.gd")
 const KiteSkins := preload("res://scripts/kite_skins.gd")
 const Brand := preload("res://scripts/brand.gd")
+const ProfileSc := preload("res://scripts/profile.gd")
 
 signal quit_requested
 signal settings_changed
 signal kite_chosen(id: String)
 
 var settings: SettingsSc
+var profile: ProfileSc
 
 var _dim: ColorRect
 var _pause_box: PanelContainer
@@ -20,10 +22,21 @@ var _hints: CheckButton
 var _how_box: PanelContainer
 var _kite_box: PanelContainer
 var _kite_row: HBoxContainer
+var _shop_coins: Label
+var _shop_note: Label
+var _profile_box: PanelContainer
+var _name_edit: LineEdit
+var _rank_lab: Label
+var _xp_fill: ColorRect
+var _xp_track_w: float = 320.0
+var _rec_lab: Label
+var _pause_rank: Label
+var _pause_coins: Label
 var _open: bool = false
 var _in_settings: bool = false
 var _in_how: bool = false
 var _in_kites: bool = false
+var _in_profile: bool = false
 
 
 func is_open() -> bool:
@@ -40,9 +53,11 @@ func _ready() -> void:
 	_set_page(false, false)
 
 
-func setup(settings_in: SettingsSc) -> void:
+func setup(settings_in: SettingsSc, profile_in: ProfileSc = null) -> void:
 	settings = settings_in
+	profile = profile_in
 	_sync_widgets()
+	refresh_profile()
 	refresh_kite_cards("")
 
 
@@ -53,6 +68,11 @@ func toggle() -> void:
 		return
 	if _open and _in_kites:
 		_in_kites = false
+		open_pause()
+		return
+	if _open and _in_profile:
+		_save_name()
+		_in_profile = false
 		open_pause()
 		return
 	if _open and _in_settings:
@@ -70,7 +90,9 @@ func open_pause() -> void:
 	_in_settings = false
 	_in_how = false
 	_in_kites = false
+	_in_profile = false
 	get_tree().paused = true
+	refresh_profile()
 	_set_page(true, false)
 
 
@@ -79,6 +101,7 @@ func open_settings() -> void:
 	_in_settings = true
 	_in_how = false
 	_in_kites = false
+	_in_profile = false
 	get_tree().paused = true
 	_sync_widgets()
 	_set_page(true, true)
@@ -89,6 +112,7 @@ func open_how() -> void:
 	_in_settings = false
 	_in_how = true
 	_in_kites = false
+	_in_profile = false
 	get_tree().paused = true
 	_dim.visible = true
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -96,6 +120,8 @@ func open_how() -> void:
 	_settings_box.visible = false
 	if _kite_box:
 		_kite_box.visible = false
+	if _profile_box:
+		_profile_box.visible = false
 	_how_box.visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
@@ -105,6 +131,7 @@ func open_kites() -> void:
 	_in_settings = false
 	_in_how = false
 	_in_kites = true
+	_in_profile = false
 	get_tree().paused = true
 	refresh_kite_cards("")
 	_dim.visible = true
@@ -112,29 +139,55 @@ func open_kites() -> void:
 	_pause_box.visible = false
 	_settings_box.visible = false
 	_how_box.visible = false
+	if _profile_box:
+		_profile_box.visible = false
 	if _kite_box:
 		_kite_box.visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 
 func close() -> void:
+	_save_name()
 	_open = false
 	_in_settings = false
 	_in_how = false
 	_in_kites = false
+	_in_profile = false
 	get_tree().paused = false
 	_set_page(false, false)
+
+
+func open_profile() -> void:
+	_open = true
+	_in_settings = false
+	_in_how = false
+	_in_kites = false
+	_in_profile = true
+	get_tree().paused = true
+	refresh_profile()
+	_dim.visible = true
+	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_box.visible = false
+	_settings_box.visible = false
+	_how_box.visible = false
+	if _kite_box:
+		_kite_box.visible = false
+	if _profile_box:
+		_profile_box.visible = true
+	mouse_filter = Control.MOUSE_FILTER_STOP
 
 
 func _set_page(show_dim: bool, settings_page: bool) -> void:
 	_dim.visible = show_dim
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP if show_dim else Control.MOUSE_FILTER_IGNORE
-	_pause_box.visible = show_dim and not settings_page and not _in_how and not _in_kites
+	_pause_box.visible = show_dim and not settings_page and not _in_how and not _in_kites and not _in_profile
 	_settings_box.visible = show_dim and settings_page
 	if _how_box:
 		_how_box.visible = show_dim and _in_how
 	if _kite_box:
 		_kite_box.visible = show_dim and _in_kites
+	if _profile_box:
+		_profile_box.visible = show_dim and _in_profile
 	mouse_filter = Control.MOUSE_FILTER_STOP if show_dim else Control.MOUSE_FILTER_IGNORE
 
 
@@ -156,9 +209,15 @@ func _build() -> void:
 	var pause_col := _vbox(_pause_box)
 	pause_col.add_child(_title(Brand.TITLE))
 	pause_col.add_child(_caption(Brand.TAGLINE))
-	pause_col.add_child(_gap(12))
+	_pause_rank = _caption("Rookie")
+	_pause_rank.add_theme_color_override("font_color", Brand.GOLD)
+	pause_col.add_child(_pause_rank)
+	_pause_coins = _caption("0 coins")
+	pause_col.add_child(_pause_coins)
+	pause_col.add_child(_gap(8))
 	pause_col.add_child(_btn("Resume", close))
-	pause_col.add_child(_btn("Choose kite", open_kites))
+	pause_col.add_child(_btn("Profile", open_profile))
+	pause_col.add_child(_btn("Shop", open_kites))
 	pause_col.add_child(_btn("How to play", open_how))
 	pause_col.add_child(_btn("Settings", open_settings))
 	pause_col.add_child(_btn("Quit", func() -> void: quit_requested.emit()))
@@ -208,15 +267,21 @@ func _build() -> void:
 	_fill_how(_how_box)
 
 	_kite_box = _make_card()
-	_kite_box.custom_minimum_size = Vector2(620, 320)
+	_kite_box.custom_minimum_size = Vector2(640, 360)
 	center.add_child(_kite_box)
 	_fill_kites(_kite_box)
+
+	_profile_box = _make_card()
+	_profile_box.custom_minimum_size = Vector2(480, 420)
+	center.add_child(_profile_box)
+	_fill_profile(_profile_box)
 
 
 func _back_from_settings() -> void:
 	_in_settings = false
 	_in_how = false
 	_in_kites = false
+	_in_profile = false
 	open_pause()
 
 
@@ -224,20 +289,94 @@ func _fill_kites(card: PanelContainer) -> void:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 12)
 	card.add_child(v)
-	v.add_child(_title("CHOOSE KITE"))
-	v.add_child(_caption("Your sail. The rival flies a different one."))
+	v.add_child(_title("SHOP"))
+	_shop_coins = _caption("0 coins")
+	_shop_coins.add_theme_color_override("font_color", Brand.GOLD)
+	v.add_child(_shop_coins)
+	v.add_child(_caption("Buy a sail with coins. Saffron is free."))
 	_kite_row = HBoxContainer.new()
 	_kite_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	_kite_row.add_theme_constant_override("separation", 14)
 	v.add_child(_kite_row)
+	_shop_note = _caption("")
+	v.add_child(_shop_note)
 	v.add_child(_btn("Back", open_pause))
 	refresh_kite_cards("")
+
+
+func _fill_profile(card: PanelContainer) -> void:
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	card.add_child(v)
+	v.add_child(_title("PROFILE"))
+	v.add_child(_caption("Your card for later online VS. Photo comes from Play later."))
+	_name_edit = LineEdit.new()
+	_name_edit.placeholder_text = "Your name"
+	_name_edit.max_length = 16
+	_name_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_name_edit.custom_minimum_size = Vector2(0, 40)
+	_name_edit.text_submitted.connect(func(_t: String) -> void: _save_name())
+	_name_edit.focus_exited.connect(_save_name)
+	v.add_child(_name_edit)
+	_rank_lab = _caption("Rookie")
+	_rank_lab.add_theme_color_override("font_color", Brand.GOLD)
+	v.add_child(_rank_lab)
+	var track := ColorRect.new()
+	track.color = Color(1.0, 0.84, 0.38, 0.16)
+	track.custom_minimum_size = Vector2(_xp_track_w, 8)
+	v.add_child(track)
+	_xp_fill = ColorRect.new()
+	_xp_fill.color = Color(1.0, 0.78, 0.32, 0.95)
+	_xp_fill.custom_minimum_size = Vector2(40, 8)
+	_xp_fill.position = Vector2.ZERO
+	track.add_child(_xp_fill)
+	_rec_lab = _caption("0–0  ·  0 cuts")
+	v.add_child(_rec_lab)
+	v.add_child(_btn("Back", open_pause))
+
+
+func refresh_profile() -> void:
+	if profile == null:
+		return
+	if _pause_rank:
+		_pause_rank.text = "%s  ·  %s" % [profile.display_name, profile.rank_name()]
+	if _pause_coins:
+		_pause_coins.text = "%d coins" % profile.coins
+	if _shop_coins:
+		_shop_coins.text = "%d coins" % profile.coins
+	if _name_edit and not _name_edit.has_focus():
+		_name_edit.text = profile.display_name
+	if _rank_lab:
+		if profile.rank_index() >= 6:
+			_rank_lab.text = "Master"
+		else:
+			_rank_lab.text = "%s  →  %s" % [profile.rank_name(), profile.next_rank_name()]
+	if _xp_fill:
+		_xp_fill.custom_minimum_size.x = _xp_track_w * profile.rank_progress()
+		_xp_fill.size.x = _xp_track_w * profile.rank_progress()
+	if _rec_lab:
+		_rec_lab.text = "%d–%d battles  ·  %d cuts" % [profile.battles_won, profile.battles_lost, profile.cuts]
+
+
+func _save_name() -> void:
+	if profile == null or _name_edit == null:
+		return
+	var n := _name_edit.text.strip_edges()
+	if n == "":
+		n = "You"
+	if n == profile.display_name:
+		return
+	profile.display_name = n
+	profile.save_to_disk()
+	refresh_profile()
 
 
 func refresh_kite_cards(selected: String) -> void:
 	if _kite_row == null:
 		return
-	if selected == "" and settings:
+	if selected == "" and profile:
+		selected = KiteSkins.clamp_id(profile.kite_id)
+	elif selected == "" and settings:
 		selected = KiteSkins.clamp_id(settings.kite_id)
 	elif selected == "":
 		selected = KiteSkins.SAFFRON
@@ -245,12 +384,36 @@ func refresh_kite_cards(selected: String) -> void:
 		_kite_row.remove_child(c)
 		c.queue_free()
 	for id in KiteSkins.ids():
-		_kite_row.add_child(KiteSkins.make_card(id, id == selected, _on_kite_pick))
+		var owned := profile.owns(id) if profile else id == KiteSkins.SAFFRON
+		_kite_row.add_child(KiteSkins.make_shop_card(id, id == selected, owned, _on_kite_pick))
+	if _shop_coins and profile:
+		_shop_coins.text = "%d coins" % profile.coins
 
 
 func _on_kite_pick(id: String) -> void:
+	id = KiteSkins.clamp_id(id)
+	if profile:
+		if profile.owns(id):
+			profile.set_kite(id)
+			if _shop_note:
+				_shop_note.text = ""
+		elif profile.buy(id):
+			if _shop_note:
+				_shop_note.text = "Bought %s." % KiteSkins.title_for(id)
+		else:
+			if _shop_note:
+				_shop_note.text = "Need %d coins." % KiteSkins.price_for(id)
+			call_deferred("refresh_kite_cards", profile.kite_id)
+			return
+		if settings:
+			settings.kite_id = profile.kite_id
+			settings.save_to_disk()
+		kite_chosen.emit(profile.kite_id)
+		refresh_profile()
+		call_deferred("refresh_kite_cards", profile.kite_id)
+		return
 	if settings:
-		settings.kite_id = KiteSkins.clamp_id(id)
+		settings.kite_id = id
 		settings.save_to_disk()
 	kite_chosen.emit(id)
 	call_deferred("refresh_kite_cards", id)

@@ -1,0 +1,17 @@
+[Unit]
+Description=PATANGBAZ game API + WebSocket
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/patangbaz/server
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=8787
+EnvironmentFile=-/opt/patangbaz/server/.env
+
+[Install]
+WantedBy=multi-user.target

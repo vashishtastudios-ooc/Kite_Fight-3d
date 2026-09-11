@@ -74,6 +74,16 @@ static func rival_id(player_id: String) -> String:
 			return SAFFRON
 
 
+static func price_for(id: String) -> int:
+	match clamp_id(id):
+		FESTIVAL:
+			return 200
+		ROYAL:
+			return 350
+		_:
+			return 0
+
+
 static func make_card(id: String, selected: bool, on_pick: Callable) -> Button:
 	var b := Button.new()
 	b.custom_minimum_size = Vector2(168, 148)
@@ -123,4 +133,19 @@ static func make_card(id: String, selected: bool, on_pick: Callable) -> Button:
 	name.add_theme_color_override("font_color", Color(1.0, 0.92, 0.76))
 	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(name)
+	return b
+
+
+static func make_shop_card(id: String, selected: bool, owned: bool, on_pick: Callable) -> Button:
+	var b := make_card(id, selected and owned, on_pick)
+	if owned:
+		return b
+	var price := Label.new()
+	price.text = "%d coins" % price_for(id)
+	price.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	price.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	price.add_theme_font_size_override("font_size", 14)
+	price.add_theme_color_override("font_color", Color(1.0, 0.84, 0.38))
+	b.get_child(0).add_child(price)
+	b.modulate = Color(1, 1, 1, 0.88)
 	return b

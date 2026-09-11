@@ -13,6 +13,7 @@ const SettingsSc := preload("res://scripts/game_settings.gd")
 const PersonSc := preload("res://scripts/rooftop_person.gd")
 const KiteSkins := preload("res://scripts/kite_skins.gd")
 const TitleKiteSc := preload("res://scripts/title_kite.gd")
+const ProfileSc := preload("res://scripts/profile.gd")
 
 @onready var world_env: WorldEnvironment = $WorldEnvironment
 @onready var sun: DirectionalLight3D = $Sun
@@ -47,6 +48,18 @@ var _preview_girl: PersonSc
 var _palace_girl: PersonSc
 var _terrace_mate: PersonSc
 var _title_kite: Node3D
+var _profile: ProfileSc
+var _match_cuts: int = 0
+var _match_paid: bool = false
+var _save_dodges: int = 0
+var _save_paid: bool = false
+var _net: Node
+var _online: bool = false
+var _net_live: bool = false
+var _peer_card: Dictionary = {}
+var _peer_id: String = ""
+var _remote_state: Dictionary = {}
+var _send_t: float = 0.0
 const INTRO_CAM_DUR := 6.0
 const BODY_BOY := preload("res://assets/people/stylized+boy+3d+model (1).glb")
 const BODY_GIRL := preload("res://assets/people/stylized+female+3d+newmodel.glb")
@@ -67,6 +80,15 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	var settings := SettingsSc.new()
 	settings.load_from_disk()
+	_profile = ProfileSc.new()
+	_profile.load_from_disk()
+	var sync := preload("res://scripts/profile_sync.gd").new()
+	sync.name = "ProfileSync"
+	add_child(sync)
+	_profile.cloud_push = sync.push
+	sync.setup(_profile)
+	if _profile.owns(_profile.kite_id):
+		settings.kite_id = _profile.kite_id
 	settings.apply(self)
 	player.intro_lock = true
 	if player.camera:
@@ -88,10 +110,28 @@ func _ready() -> void:
 	add_child(_rival_ai)
 	_rival_ai.setup(rival, kite, pech, rival_hand)
 	hud.game_settings = settings
+	hud.profile = _profile
 	hud.graphics_host = self
 	hud.setup(wind, kite, rival, pech)
 	hud.character_chosen.connect(_on_character_chosen)
 	hud.mode_chosen.connect(_on_mode_chosen)
+	hud.online_host.connect(_on_online_host)
+	hud.online_join.connect(_on_online_join)
+	_net = preload("res://scripts/net_room.gd").new()
+	_net.name = "NetRoom"
+	add_child(_net)
+	_net.waiting.connect(_on_net_waiting)
+	_net.live.connect(_on_net_live)
+	_net.peer_ready.connect(_on_net_peer)
+	_net.remote_state.connect(_on_net_state)
+	_net.kaata.connect(_on_net_kaata)
+	_net.gone.connect(_on_net_gone)
+	_net.fail.connect(_on_net_fail)
+	if pech:
+		pech.kaata.connect(_on_match_kaata)
+		pech.cut_wanted.connect(_on_cut_wanted)
+	if kite:
+		kite.cut_down.connect(_on_player_cut)
 	_rockets = preload("res://scripts/diwali_rockets.gd").new()
 	_rockets.name = "DiwaliRockets"
 	add_child(_rockets)
@@ -197,6 +237,8 @@ func _physics_process(delta: float) -> void:
 	if Input.is_action_just_pressed("relaunch"):
 		kite.relaunch()
 		_launch_look = 1.4
+		_save_paid = false
+		_save_dodges = 0
 
 	## First toss clears the title, hands the view to first person, and sends
 	## the rival up to meet you.
@@ -211,7 +253,7 @@ func _physics_process(delta: float) -> void:
 			player.camera.current = true
 		if _game_mode == "battle":
 			rival.visible = true
-			if not rival.is_airborne():
+			if not _online and not rival.is_airborne():
 				rival.launch()
 		else:
 			rival.visible = false
@@ -232,9 +274,16 @@ func _physics_process(delta: float) -> void:
 		_dheel_held = dheel
 
 	kite.tick(delta, hand, viewer, reel, bias)
-	## Hold the rival on its roof during the title — its AI would otherwise
-	## relaunch and dive the parked patang straight into the frame.
-	if _rival_ai and _game_mode == "battle":
+	if _online:
+		if _net_live:
+			if not _remote_state.is_empty():
+				rival.apply_net(_remote_state, delta)
+			_send_t += delta
+			if _send_t >= 0.05:
+				_send_t = 0.0
+				if _net:
+					_net.send_state(kite.pack_net())
+	elif _rival_ai and _game_mode == "battle":
 		_rival_ai.tick(delta)
 	if pech and _game_mode == "battle":
 		pech.tick(delta, kite, rival)
@@ -606,6 +655,9 @@ func _on_character_chosen(id: String) -> void:
 	if _character_picked:
 		return
 	_character_picked = true
+	if _profile:
+		_profile.flyer_id = id
+		_profile.save_to_disk()
 	player.intro_lock = false
 	player.setup_avatar(id)
 	_build_handle()
@@ -621,6 +673,23 @@ func _on_character_chosen(id: String) -> void:
 func _on_mode_chosen(id: String) -> void:
 	if _flyer_picked:
 		return
+	if id == "online":
+		_game_mode = "battle"
+		_online = true
+		if hud:
+			hud.game_mode = "battle"
+		if _rockets:
+			_rockets.enabled = false
+		kite.fight_pips = true
+		rival.fight_pips = true
+		rival.is_ai = false
+		if pech:
+			pech.net_mode = true
+			pech.player_wins = 0
+			pech.rival_wins = 0
+		_match_cuts = 0
+		_match_paid = false
+		return
 	_game_mode = "save" if id == "save" else "battle"
 	_flyer_picked = true
 	if hud:
@@ -632,12 +701,148 @@ func _on_mode_chosen(id: String) -> void:
 	if _game_mode == "save":
 		rival.visible = false
 	else:
+		_match_cuts = 0
+		_match_paid = false
+		if pech:
+			pech.player_wins = 0
+			pech.rival_wins = 0
 		var fight_hand := _battle_hand()
 		rival.hand_pos = fight_hand
 		if _rival_ai:
 			_rival_ai.hand = fight_hand
 		rival.visible = true
 		rival.launch()
+
+
+func _net_play_id() -> String:
+	if _profile == null:
+		return str(OS.get_process_id())
+	return "%s_%d" % [_profile.play_id, OS.get_process_id()]
+
+
+func _on_online_host() -> void:
+	if _net == null or _profile == null:
+		return
+	if hud:
+		hud.set_net_status("Opening a roof…")
+	_net.host(_net_play_id(), _profile.you_card())
+
+
+func _on_online_join(code: String) -> void:
+	if _net == null or _profile == null:
+		return
+	if code.strip_edges().length() < 4:
+		if hud:
+			hud.set_net_status("Type the 4-letter code first.")
+		return
+	if hud:
+		hud.set_net_status("Joining…")
+	_net.join(_net_play_id(), _profile.you_card(), code)
+
+
+func _on_net_waiting(code: String) -> void:
+	if hud:
+		hud.set_net_status("Code  %s  —  waiting for them" % code)
+
+
+func _on_net_peer(card: Dictionary) -> void:
+	_peer_card = card
+	_peer_id = str(card.get("playId", ""))
+	_refresh_online_vs()
+
+
+func _on_net_live() -> void:
+	_net_live = true
+	_flyer_picked = true
+	rival.visible = true
+	_hide_rival_npc()
+	if _net and _net.slot == "b":
+		_setup_guest_roof()
+	if hud:
+		hud.hide_net_lobby()
+		hud.show_toss_prompt()
+	_refresh_online_vs()
+
+
+func _on_net_state(data: Dictionary) -> void:
+	_remote_state = data
+
+
+func _on_cut_wanted(player_won: bool) -> void:
+	if not _online or not _net_live or _net == null:
+		return
+	if player_won:
+		_net.send_cut()
+
+
+func _on_net_kaata(winner_id: String, a_cuts: int, b_cuts: int) -> void:
+	if not _online or pech == null:
+		return
+	var i_won := winner_id != "" and _net != null and winner_id == _net.play_id
+	if i_won:
+		rival.apply_cut()
+		_match_cuts += 1
+	else:
+		kite.apply_cut()
+	if _net and _net.slot == "a":
+		pech.player_wins = a_cuts
+		pech.rival_wins = b_cuts
+	else:
+		pech.player_wins = b_cuts
+		pech.rival_wins = a_cuts
+	if pech.player_wins < 2 and pech.rival_wins < 2:
+		return
+	if _net and _net.slot == "a":
+		var win_id := ""
+		if a_cuts >= 2:
+			win_id = _net.play_id
+		elif b_cuts >= 2:
+			win_id = _peer_id
+		_net.finish_match(a_cuts, b_cuts, win_id)
+	_payout_battle()
+
+
+func _on_net_gone() -> void:
+	_net_live = false
+	if hud:
+		hud.set_net_status("They left the roof.")
+
+
+func _on_net_fail(why: String) -> void:
+	if hud:
+		hud.set_net_status(why)
+
+
+func _setup_guest_roof() -> void:
+	player.move_to_roof(city.rival_hand_position(), city.rival_roof_bounds())
+	kite.hand_pos = player.hand_position()
+
+
+func _hide_rival_npc() -> void:
+	var npc := get_node_or_null("RivalFlyer")
+	if npc:
+		npc.visible = false
+
+
+func _refresh_online_vs() -> void:
+	if hud == null or _profile == null:
+		return
+	if _peer_card.is_empty():
+		return
+	hud.show_vs_cards(_profile.you_card(), _vs_from_peer(_peer_card))
+
+
+func _vs_from_peer(d: Dictionary) -> Dictionary:
+	var n := str(d.get("name", "Rival")).strip_edges()
+	if n == "":
+		n = "Rival"
+	return {
+		"name": n,
+		"rank": str(d.get("rank", "Rookie")),
+		"won": int(d.get("won", 0)),
+		"letter": n.substr(0, 1).to_upper(),
+		"is_you": false,
+	}
 
 
 func _battle_hand() -> Vector3:
@@ -666,8 +871,51 @@ func _spawn_terrace_mate(id: String) -> void:
 
 
 func _on_player_dodged() -> void:
+	_save_dodges += 1
 	if _palace_girl:
 		_palace_girl.play_clap()
+
+
+func _on_match_kaata(player_won: bool, _at: Vector3) -> void:
+	if _online:
+		return
+	if _game_mode != "battle" or _match_paid:
+		return
+	if player_won:
+		_match_cuts += 1
+	if pech and (pech.player_wins >= 2 or pech.rival_wins >= 2):
+		_payout_battle()
+
+
+func _payout_battle() -> void:
+	if _profile == null or _match_paid:
+		return
+	_match_paid = true
+	var won := pech != null and pech.player_wins >= 2
+	var result := _profile.award_battle(_match_cuts, won)
+	if hud:
+		hud.show_payout(result)
+	var t := get_tree().create_timer(4.0)
+	t.timeout.connect(_reset_evening)
+
+
+func _reset_evening() -> void:
+	if pech:
+		pech.player_wins = 0
+		pech.rival_wins = 0
+	_match_cuts = 0
+	_match_paid = false
+
+
+func _on_player_cut() -> void:
+	if _game_mode != "save" or _save_paid:
+		return
+	_save_paid = true
+	if _profile == null:
+		return
+	var result := _profile.award_save(_save_dodges)
+	if hud:
+		hud.show_payout(result)
 
 
 func _place_windsock() -> void:
