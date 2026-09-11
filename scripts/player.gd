@@ -185,8 +185,9 @@ func look_towards(world_point: Vector3, delta: float, weight: float = 3.0, chase
 	var target_yaw := atan2(-to.x, -to.z)
 	var target_pitch := atan2(to.y, Vector3(to.x, 0.0, to.z).length())
 	look_yaw = lerp_angle(look_yaw, target_yaw, clampf(weight * delta, 0.0, 1.0))
-	var lo := deg_to_rad(-68.0) if chase else deg_to_rad(-22.0)
-	var hi := deg_to_rad(18.0) if chase else deg_to_rad(12.0)
+	## Chase must look almost overhead — a high patang sits at 50–70° up.
+	var lo := deg_to_rad(-72.0) if chase else deg_to_rad(-22.0)
+	var hi := deg_to_rad(80.0) if chase else deg_to_rad(18.0)
 	look_pitch = lerp(look_pitch, clampf(target_pitch, lo, hi), clampf(weight * delta, 0.0, 1.0))
 
 

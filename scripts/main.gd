@@ -14,6 +14,7 @@ const PersonSc := preload("res://scripts/rooftop_person.gd")
 const KiteSkins := preload("res://scripts/kite_skins.gd")
 const TitleKiteSc := preload("res://scripts/title_kite.gd")
 const ProfileSc := preload("res://scripts/profile.gd")
+const NetRoomSc := preload("res://scripts/net_room.gd")
 
 @onready var world_env: WorldEnvironment = $WorldEnvironment
 @onready var sun: DirectionalLight3D = $Sun
@@ -53,7 +54,7 @@ var _match_cuts: int = 0
 var _match_paid: bool = false
 var _save_dodges: int = 0
 var _save_paid: bool = false
-var _net: Node
+var _net: NetRoomSc
 var _online: bool = false
 var _net_live: bool = false
 var _peer_card: Dictionary = {}
@@ -117,7 +118,7 @@ func _ready() -> void:
 	hud.mode_chosen.connect(_on_mode_chosen)
 	hud.online_host.connect(_on_online_host)
 	hud.online_join.connect(_on_online_join)
-	_net = preload("res://scripts/net_room.gd").new()
+	_net = NetRoomSc.new()
 	_net.name = "NetRoom"
 	add_child(_net)
 	_net.waiting.connect(_on_net_waiting)
@@ -316,15 +317,17 @@ func _follow_kite_cam(delta: float) -> void:
 		var rest := _intro_look_target() if _intro_active else _sky_look_target()
 		player.look_towards(rest, delta, 2.6)
 		return
-	var kite_pt := kite.global_position + kite.velocity * 0.16
+	var kite_pt := kite.global_position + kite.velocity * 0.22
 	var alt := kite.global_position.y - player.global_position.y
 	var off := _kite_leaving_view(kite_pt)
-	if off or alt > 20.0:
+	if off or alt > 12.0:
 		_cam_chase = true
-	elif _kite_well_in_view(kite_pt) and alt < 15.0:
+	elif _kite_well_in_view(kite_pt) and alt < 8.0:
 		_cam_chase = false
 	if _cam_chase:
-		var w := 8.5 if kite.phase == KiteSc.Phase.FLY else 6.8
+		var w := 10.0 if kite.phase == KiteSc.Phase.FLY else 7.5
+		if alt > 25.0:
+			w = 12.5
 		player.look_towards(kite_pt, delta, w, true)
 		return
 	var chest := player.global_position + Vector3(0.0, 0.9, 0.0)
@@ -778,7 +781,7 @@ func _on_cut_wanted(player_won: bool) -> void:
 func _on_net_kaata(winner_id: String, a_cuts: int, b_cuts: int) -> void:
 	if not _online or pech == null:
 		return
-	var i_won := winner_id != "" and _net != null and winner_id == _net.play_id
+	var i_won: bool = winner_id != "" and _net != null and winner_id == _net.play_id
 	if i_won:
 		rival.apply_cut()
 		_match_cuts += 1
