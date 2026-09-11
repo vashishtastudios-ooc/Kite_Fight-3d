@@ -1,0 +1,37 @@
+# PATANGBAZ game API + WebSocket
+# From this folder:  docker compose up -d --build
+# Proxy https://www.game.azziop.com  and  wss://www.game.azziop.com/ws
+# to this container. /ws must send Upgrade + Connection headers.
+
+services:
+  patangbaz:
+    build: .
+    image: patangbaz-api:latest
+    container_name: patangbaz
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8787"
+      PUBLIC_URL: "https://www.game.azziop.com"
+    ports:
+      - "8787:8787"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    # If nginx/Caddy/Traefik already runs in Docker, drop "ports" and
+    # attach this service to that proxy network instead:
+    # networks:
+    #   - proxy
+
+# networks:
+#   proxy:
+#     external: true
