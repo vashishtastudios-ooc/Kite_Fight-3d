@@ -1,7 +1,8 @@
 # PATANGBAZ game API + WebSocket
 # From this folder:  docker compose up -d --build
-# Proxy https://www.game.azziop.com  and  wss://www.game.azziop.com/ws
-# to this container. /ws must send Upgrade + Connection headers.
+# Caddy in front: import server/deploy/Caddyfile
+#   https://www.game.azziop.com  and  wss://www.game.azziop.com/ws
+#   → this container :8787  (Caddy reverse_proxy handles the socket)
 
 services:
   patangbaz:
@@ -27,8 +28,8 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
-    # If nginx/Caddy/Traefik already runs in Docker, drop "ports" and
-    # attach this service to that proxy network instead:
+    # If Caddy already runs in Docker, drop "ports" and attach this
+    # service to that proxy network, then reverse_proxy patangbaz:8787
     # networks:
     #   - proxy
 

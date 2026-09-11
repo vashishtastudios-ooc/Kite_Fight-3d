@@ -1,0 +1,12 @@
+# Drop this site into the existing Caddy config (or import this file).
+# Caddy issues HTTPS itself. reverse_proxy already upgrades WebSockets
+# for /ws — no extra Upgrade headers needed.
+#
+# Caddy on the host, game in Docker publishing 8787:
+www.game.azziop.com, game.azziop.com {
+	reverse_proxy 127.0.0.1:8787
+}
+
+# If Caddy is also a container on the same Docker network, use this
+# instead of 127.0.0.1:8787:
+#	reverse_proxy patangbaz:8787
