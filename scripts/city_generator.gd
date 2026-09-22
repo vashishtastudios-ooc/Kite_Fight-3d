@@ -15,11 +15,9 @@ const KIT_TALL := preload("res://assets/buildings/tall modern building 3d model.
 const KIT_MASJID := preload("res://assets/buildings/ornate arch gateway masjid 3d model.glb")
 const KIT_HOUSE := preload("res://assets/buildings/building 3d model (1).glb")
 const KIT_SHOP := preload("res://assets/buildings/old shop building 3d model (1).glb")
-const KIT_NEON := preload("res://assets/buildings/neon-lit buildings 3d model.glb")
 const KIT_CLOCK := preload("res://assets/buildings/clock+tower+3d+model.glb")
 const KIT_STORY2 := preload("res://assets/buildings/two-story+house+3d+model.glb")
 const KIT_PALACE := preload("res://assets/buildings/pink palace 3d model.glb")
-const KIT_TREE := preload("res://assets/street/pink tree.glb")
 const KIT_TREE_BIG := preload("res://assets/street/tree+3d+model.glb")
 const KIT_TREE_ORANGE := preload("res://assets/street/orange+flowering+tree+3d+model.glb")
 const KIT_TREE_DENSE := preload("res://assets/street/densetree+3d+model (1).glb")
@@ -45,17 +43,20 @@ var _kit_houses: Array[PackedScene] = []
 var _kit_story2: Array[PackedScene] = []
 var _kit_shops: Array[PackedScene] = []
 var _kit_mid: Array[PackedScene] = []
-var _kit_neon: Array[PackedScene] = []
 var _kit_towers: Array[PackedScene] = []
 var _kit_landmarks: Array[PackedScene] = []
 var _tower_budget: int = 0
 var _last_kit_aabb: AABB
+var _last_kit_node: Node3D
 var _building_mat: ShaderMaterial
 var _styl_mat: ShaderMaterial
 var _water_mat: ShaderMaterial
 var _box_mesh: BoxMesh
 var _cyl_mesh: CylinderMesh
 var _sph_mesh: SphereMesh
+var _tree_info_cache: Dictionary = {}
+var _yard_tree_jobs: Array[Dictionary] = []
+var _yard_tree_feet: Array[Vector2] = []
 
 
 func build() -> void:
@@ -84,6 +85,7 @@ func build() -> void:
 	_place_launcher_homes()
 	_scatter_city_360()
 	_dress_side_trees()
+	_dress_mid_city_yards()
 	_add_far_kit_city()
 	_scatter_far_greenery()
 	_build_water()
@@ -190,15 +192,20 @@ func _build_ground() -> void:
 	## Road grid aligned to the plot layout (roads run the plot boundaries).
 	gmat.set_shader_parameter("grid_spacing", PLOT)
 	gmat.set_shader_parameter("grid_origin", Vector2(16.0, 82.0))
-	gmat.set_shader_parameter("road_half_width", 3.6)
-	gmat.set_shader_parameter("road_color", Color(0.26, 0.22, 0.19))
-	gmat.set_shader_parameter("dirt_color", Color(0.47, 0.36, 0.25))
-	gmat.set_shader_parameter("dirt_color2", Color(0.36, 0.27, 0.18))
-	## Far ground dissolves into the exact horizon-sky tone, on the same distance
-	## window as the fog, so distant ground reads as haze/sky — not empty lots.
+	gmat.set_shader_parameter("road_half_width", 2.9)
+	gmat.set_shader_parameter("gali_half_width", 1.15)
+	gmat.set_shader_parameter("major_stride", 4.0)
+	gmat.set_shader_parameter("road_edge", 1.6)
+	gmat.set_shader_parameter("shoulder_width", 0.85)
+	gmat.set_shader_parameter("road_color", Color(0.28, 0.22, 0.18))
+	gmat.set_shader_parameter("dirt_color", Color(0.52, 0.40, 0.28))
+	gmat.set_shader_parameter("dirt_color2", Color(0.40, 0.30, 0.20))
+	gmat.set_shader_parameter("rim_color", Color(0.34, 0.22, 0.15))
+	## Far ground dissolves into the horizon after the last city ring, not
+	## under the mid lots.
 	gmat.set_shader_parameter("haze_color", Color(0.90, 0.66, 0.56))
-	gmat.set_shader_parameter("haze_start", 300.0)
-	gmat.set_shader_parameter("haze_end", 640.0)
+	gmat.set_shader_parameter("haze_start", 340.0)
+	gmat.set_shader_parameter("haze_end", 780.0)
 	ground.material_override = gmat
 	ground.position = Vector3(0.0, -0.04, 40.0)
 	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -294,9 +301,12 @@ func _dress_front_street() -> void:
 		{"tree": Vector3(8.0, 0.0, -32.0), "yaw": 1.05, "h": 11.6, "cart": Vector3(3.0, 0.0, 7.6)},
 		{"tree": Vector3(-7.0, 0.0, -52.0), "yaw": 0.2, "h": 12.3, "cart": Vector3(2.8, 0.0, 7.4)},
 	]
-	for spec in spots:
+	## Flowering and stylized street trees alternate so the terrace view varies.
+	var street_kits: Array[PackedScene] = [KIT_TREE_ORANGE, KIT_TREE_STYL]
+	for i in spots.size():
+		var spec: Dictionary = spots[i]
 		var feet: Vector3 = spec["tree"]
-		if not _place_prop(KIT_TREE, feet, spec["h"], spec["yaw"]):
+		if not _place_prop(street_kits[i % street_kits.size()], feet, spec["h"], spec["yaw"]):
 			continue
 		var cart_feet: Vector3 = feet + spec["cart"]
 		## Face the terrace so the stall reads from the roof.
@@ -326,15 +336,22 @@ func _place_prop(scene: PackedScene, feet: Vector3, target_h: float, yaw: float,
 	node.force_update_transform()
 	_hide_imported_ground(node)
 	_enable_prop_shadows(node, shadows)
+	## Trees lean when a gust rolls past (see wind_vfx.gd).
+	if scene == KIT_TREE_BIG or scene == KIT_TREE_ORANGE or scene == KIT_TREE_DENSE or scene == KIT_TREE_STYL:
+		node.add_to_group("sway_tree")
 	return true
 
 
-func _hide_imported_ground(node: Node) -> void:
+func _is_imported_ground_mesh(mi: MeshInstance3D) -> bool:
 	## Tripo kits often ship a thin square dirt slab under the mesh.
+	var aabb := mi.get_aabb()
+	return aabb.size.y < 0.22 and maxf(aabb.size.x, aabb.size.z) > 1.6 and aabb.position.y < 0.35
+
+
+func _hide_imported_ground(node: Node) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
-		var aabb := mi.get_aabb()
-		if aabb.size.y < 0.22 and maxf(aabb.size.x, aabb.size.z) > 1.6 and aabb.position.y < 0.35:
+		if _is_imported_ground_mesh(mi):
 			mi.visible = false
 	for child in node.get_children():
 		_hide_imported_ground(child)
@@ -349,36 +366,27 @@ func _on_building_foot(feet: Vector3) -> bool:
 
 
 func _dress_side_trees() -> void:
-	## Random roadside clumps on the left and right — not a stamped row.
-	var kits: Array[PackedScene] = [KIT_TREE_DENSE, KIT_TREE_STYL, KIT_TREE, KIT_TREE_ORANGE]
+	## Occasional roadside pair — a lane tree, not a hedge around every block.
+	var kits: Array[PackedScene] = [KIT_TREE_DENSE, KIT_TREE_STYL, KIT_TREE_ORANGE]
 	for ix in range(-10, 12):
 		for iz in range(-10, 9):
 			var px := 16.0 + (float(ix) + 0.5) * PLOT
 			var pz := 82.0 + (float(iz) + 0.5) * PLOT
 			var radius := Vector2(px, pz - 92.0).length()
-			if radius < 30.0 or radius > 175.0:
+			if radius < 36.0 or radius > 175.0:
 				continue
-			if _in_kite_window(px, pz, radius):
-				continue
-			## Keep the open front street clear; dress left and right mohalla.
-			if absf(px) < 20.0 and pz < 72.0:
+			if _in_kite_window(px, pz, radius) or _is_front_chowk(px, pz):
 				continue
 			var skip := _rng.randf()
-			if skip < 0.28:
+			if skip < 0.52:
 				continue
-			var count := 1
-			if skip > 0.70:
-				count = 2
-			if skip > 0.88:
-				count = 3
+			var count := 2 if skip > 0.88 else 1
 			for _i in count:
 				var kit: PackedScene = kits[_rng.randi_range(0, kits.size() - 1)]
 				var off := _roadside_offset(px, pz)
 				var feet := Vector3(px + off.x, 0.0, pz + off.z)
 				var h := _rng.randf_range(12.0, 16.5)
-				if kit == KIT_TREE:
-					h = _rng.randf_range(11.5, 13.6)
-				elif kit == KIT_TREE_ORANGE:
+				if kit == KIT_TREE_ORANGE:
 					h = _rng.randf_range(12.0, 14.2)
 				var yaw := _rng.randf_range(0.0, TAU)
 				_place_prop(kit, feet, h, yaw, -1.0, radius < 70.0)
@@ -394,6 +402,198 @@ func _roadside_offset(px: float, pz: float) -> Vector3:
 	return Vector3(_rng.randf_range(-5.0, 5.0), 0.0, to_z * 0.70)
 
 
+func _dress_mid_city_yards() -> void:
+	## A bagh or corner tree now and then — most lots stay dirt and rooftops.
+	_yard_tree_jobs.clear()
+	_yard_tree_feet.clear()
+	var kits: Array[PackedScene] = [KIT_TREE_DENSE, KIT_TREE_BIG]
+	for ix in range(-10, 12):
+		for iz in range(-10, 9):
+			var px := 16.0 + (float(ix) + 0.5) * PLOT
+			var pz := 82.0 + (float(iz) + 0.5) * PLOT
+			var radius := Vector2(px, pz - 92.0).length()
+			if radius < 52.0 or radius > 200.0:
+				continue
+			if _skip_mid_yard(px, pz, radius):
+				continue
+			var empty := not _plot_has_building(px, pz)
+			var skip := _rng.randf()
+			if empty and skip < 0.58:
+				continue
+			if not empty and skip < 0.74:
+				continue
+			var count := 1
+			if empty and skip > 0.86:
+				count = 2
+			var planted := 0
+			for feet in _yard_candidates(px, pz):
+				if planted >= count:
+					break
+				if _on_building_foot(feet):
+					continue
+				if _yard_tree_near(feet, 12.0):
+					continue
+				var kit: PackedScene = kits[_rng.randi_range(0, kits.size() - 1)]
+				var h := _rng.randf_range(14.0, 19.0) if kit == KIT_TREE_BIG else _rng.randf_range(11.5, 15.4)
+				if _queue_yard_tree(kit, feet, h, _rng.randf_range(0.0, TAU), radius < 70.0):
+					planted += 1
+	_flush_yard_trees()
+
+
+func _skip_mid_yard(px: float, pz: float, radius: float) -> bool:
+	if _in_kite_window(px, pz, radius) or _is_front_chowk(px, pz):
+		return true
+	if px < -12.0 and px > -46.0 and pz > 4.0 and pz < 42.0:
+		return true
+	if absf(px - 46.0) < 10.0 and absf(pz - 32.0) < 10.0:
+		return true
+	return false
+
+
+func _plot_has_building(px: float, pz: float) -> bool:
+	for aabb in building_aabbs:
+		var c := aabb.get_center()
+		if absf(c.x - px) < 9.0 and absf(c.z - pz) < 9.0:
+			return true
+	return false
+
+
+func _yard_candidates(px: float, pz: float) -> Array[Vector3]:
+	var spots: Array[Vector3] = [
+		Vector3(px + 0.4, 0.0, pz - 0.3),
+		Vector3(px + 6.2, 0.0, pz + 5.4),
+		Vector3(px - 5.8, 0.0, pz + 6.0),
+		Vector3(px + 5.5, 0.0, pz - 6.2),
+		Vector3(px - 6.4, 0.0, pz - 5.0),
+		Vector3(px + 8.0, 0.0, pz + 1.2),
+		Vector3(px - 1.5, 0.0, pz + 8.2),
+		Vector3(px + 2.0, 0.0, pz - 7.6),
+	]
+	for i in spots.size():
+		var j := _rng.randi_range(i, spots.size() - 1)
+		var tmp: Vector3 = spots[i]
+		spots[i] = spots[j]
+		spots[j] = tmp
+	return spots
+
+
+func _yard_tree_near(feet: Vector3, min_d: float) -> bool:
+	var p := Vector2(feet.x, feet.z)
+	for other in _yard_tree_feet:
+		if p.distance_to(other) < min_d:
+			return true
+	return false
+
+
+func _queue_yard_tree(scene: PackedScene, feet: Vector3, target_h: float, yaw: float, shadows: bool) -> bool:
+	if scene == null:
+		return false
+	var info := _get_tree_info(scene)
+	var parts: Array = info.get("parts", [])
+	var aabb: AABB = info.get("aabb", AABB())
+	if parts.is_empty() or aabb.size.y < 0.05:
+		return _place_prop(scene, feet, target_h, yaw, -1.0, shadows)
+	var s := target_h / aabb.size.y
+	var basis := Basis.from_euler(Vector3(0.0, yaw, 0.0)) * Basis.from_scale(Vector3(s, s, s))
+	var xf := Transform3D(basis, Vector3(feet.x, -aabb.position.y * s, feet.z))
+	_yard_tree_jobs.append({
+		"scene": scene,
+		"xf": xf,
+		"shadows": shadows,
+	})
+	_yard_tree_feet.append(Vector2(feet.x, feet.z))
+	return true
+
+
+func _get_tree_info(scene: PackedScene) -> Dictionary:
+	var key := scene.resource_path
+	if _tree_info_cache.has(key):
+		return _tree_info_cache[key]
+	var root := scene.instantiate() as Node3D
+	var parts: Array[Dictionary] = []
+	if root:
+		_collect_tree_parts(root, Transform3D.IDENTITY, parts)
+	var acc := AABB()
+	var first := true
+	for part in parts:
+		var mesh: Mesh = part["mesh"]
+		var xf: Transform3D = part["xform"]
+		var world := xf * mesh.get_aabb()
+		if first:
+			acc = world
+			first = false
+		else:
+			acc = acc.merge(world)
+	if root:
+		root.free()
+	var info := {"aabb": acc, "parts": parts}
+	_tree_info_cache[key] = info
+	return info
+
+
+func _collect_tree_parts(node: Node, xf: Transform3D, parts: Array[Dictionary]) -> void:
+	var next := xf
+	if node is Node3D:
+		next = xf * (node as Node3D).transform
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.mesh != null and mi.visible and not _is_imported_ground_mesh(mi):
+			parts.append({
+				"mesh": mi.mesh,
+				"material": mi.material_override,
+				"xform": next,
+			})
+	for child in node.get_children():
+		_collect_tree_parts(child, next, parts)
+
+
+func _flush_yard_trees() -> void:
+	var groups: Dictionary = {}
+	for job in _yard_tree_jobs:
+		var scene: PackedScene = job["scene"]
+		var key := "%s|%s" % [scene.resource_path, str(job["shadows"])]
+		if not groups.has(key):
+			groups[key] = []
+		(groups[key] as Array).append(job)
+	for key in groups:
+		var jobs: Array = groups[key]
+		if jobs.is_empty():
+			continue
+		var scene: PackedScene = jobs[0]["scene"]
+		var shadows: bool = jobs[0]["shadows"]
+		var info := _get_tree_info(scene)
+		var parts: Array = info.get("parts", [])
+		var n := jobs.size()
+		for part in parts:
+			var mesh: Mesh = part["mesh"]
+			var local_xf: Transform3D = part["xform"]
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.mesh = mesh
+			mm.instance_count = n
+			var batch_aabb := AABB()
+			for i in n:
+				var xf: Transform3D = jobs[i]["xf"] * local_xf
+				mm.set_instance_transform(i, xf)
+				var piece := xf * mesh.get_aabb()
+				batch_aabb = piece if i == 0 else batch_aabb.merge(piece)
+			var mmi := MultiMeshInstance3D.new()
+			mmi.name = "YardTrees"
+			mmi.multimesh = mm
+			var mat: Material = part["material"]
+			if mat:
+				mmi.material_override = mat
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+			mmi.custom_aabb = batch_aabb.grow(4.0)
+			if not shadows:
+				mmi.visibility_range_end = 1550.0
+				mmi.visibility_range_end_margin = 180.0
+				mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+			add_child(mmi)
+	_yard_tree_jobs.clear()
+
+
 func _build_side_neighbors() -> void:
 	## Rival roof to the left. Pack the right-hand lots next to the fly-from terrace.
 	if _place_kit_building(KIT_HOUSE, Vector3(-34.0, 0.0, 96.0), 18.0, PI * 0.5, 12.0):
@@ -407,13 +607,10 @@ func _build_side_neighbors() -> void:
 	_place_kit_building(KIT_SHOP, Vector3(26.0, 0.0, 74.0), 10.5, 0.1, 10.5)
 	if _place_kit_building(KIT_HOUSE, Vector3(26.0, 0.0, 110.0), 17.0, 0.05, 11.5):
 		_dress_kit_roof(_last_kit_aabb)
-	_place_kit_building(KIT_NEON, Vector3(16.5, 0.0, 80.0), 8.5, PI * 0.08, 6.2)
-	_place_kit_building(KIT_NEON, Vector3(44.0, 0.0, 92.0), 11.0, PI * 0.5, 7.2)
 	_place_kit_building(KIT_SHOP, Vector3(44.0, 0.0, 74.0), 11.0, -0.12, 10.5)
 	if _place_kit_building(KIT_BLUE, Vector3(44.0, 0.0, 110.0), 18.0, 0.2, 11.0):
 		_dress_kit_roof(_last_kit_aabb)
 	_place_kit_building(KIT_SHOP, Vector3(62.0, 0.0, 92.0), 10.0, PI * 0.95, 10.0)
-	_place_kit_building(KIT_NEON, Vector3(62.0, 0.0, 74.0), 10.0, 0.3, 7.0)
 	if _place_kit_building(KIT_HOUSE, Vector3(62.0, 0.0, 110.0), 15.5, -0.15, 11.0):
 		_dress_kit_roof(_last_kit_aabb)
 	if _place_kit_building(KIT_SHOP, Vector3(-28.0, 0.0, 78.0), 11.0, PI * 0.15, 11.0):
@@ -427,15 +624,13 @@ func _classify_kits() -> void:
 		var path := str(sc.resource_path).to_lower()
 		if "masjid" in path or "gateway" in path:
 			_kit_landmarks.append(sc)
-		elif "clock" in path or "palace" in path:
+		elif "clock" in path or "palace" in path or "neon" in path:
 			pass
 		elif "two-story" in path or "two+story" in path:
 			_kit_story2.append(sc)
 			_kit_houses.append(sc)
 		elif "tall" in path or "modern" in path:
 			_kit_towers.append(sc)
-		elif "neon" in path:
-			_kit_neon.append(sc)
 		elif "shop" in path:
 			_kit_shops.append(sc)
 		elif "building 3d model (1)" in path:
@@ -459,7 +654,9 @@ func _pick(list: Array[PackedScene]) -> PackedScene:
 func _scatter_city_360() -> void:
 	## Dense mohalla blocks: kits packed inside each plot, lanes left on the grid.
 	## Clock tower on the old masjid lot, dead ahead of the terrace.
-	_place_kit_building(KIT_CLOCK, Vector3(0.0, 0.0, -72.0), 46.0, 0.0, 10.0)
+	if _place_kit_building(KIT_CLOCK, Vector3(0.0, 0.0, -72.0), 55.2, 0.0, 10.0):
+		if _last_kit_node:
+			_last_kit_node.name = "FrontClock"
 	## Second tower stays off to the right skyline.
 	_place_kit_building(KIT_CLOCK, Vector3(80.0, 0.0, 14.0), 36.0, -0.18, 8.4)
 	## Pink palace on the right lot (not the road), square to the grid.
@@ -474,7 +671,7 @@ func _scatter_city_360() -> void:
 				continue
 			if absf(px) < 16.0 and absf(pz - 92.0) < 16.0:
 				continue
-			## Keep the front-left lot open for the shade tree (no leftover neon/shops).
+			## Keep the front-left lot open for the shade tree.
 			if px < -6.0 and pz > 64.0 and pz < 88.0:
 				continue
 			## Keep the tree + chai plaza clear so the stall stays visible from the roof.
@@ -482,29 +679,69 @@ func _scatter_city_360() -> void:
 				continue
 			if absf(px - 46.0) < 10.0 and absf(pz - 32.0) < 10.0:
 				continue
-			if _in_kite_window(px, pz, radius):
+			if _in_kite_window(px, pz, radius) or _is_front_chowk(px, pz):
 				continue
-			if _rng.randf() < 0.07:
+			if _rng.randf() < 0.20:
 				continue
 			_fill_plot(px, pz, radius)
+	_shrink_house_behind_clock()
+
+
+func _shrink_house_behind_clock() -> void:
+	## Tall house kit beside the front clock — cut height only, keep the footprint.
+	var best: Node3D = null
+	var best_h := 14.0
+	for child in get_children():
+		if child.name == "FrontClock" or not child is Node3D:
+			continue
+		var n := child as Node3D
+		var p := n.global_position
+		if Vector2(p.x, p.z + 72.0).length() > 44.0:
+			continue
+		var h := _node_aabb(n).size.y
+		if h > best_h:
+			best_h = h
+			best = n
+	if best == null:
+		return
+	var aabb := _node_aabb(best)
+	best.scale.y *= 12.5 / aabb.size.y
+	best.force_update_transform()
+	aabb = _node_aabb(best)
+	best.global_position = Vector3(best.global_position.x, -aabb.position.y, best.global_position.z)
+	best.force_update_transform()
+	var world := _node_aabb(best)
+	for i in building_aabbs.size():
+		if building_aabbs[i].get_center().distance_to(world.get_center()) < 12.0:
+			building_aabbs[i] = world
+			break
 
 
 func _fill_plot(px: float, pz: float, radius: float) -> void:
-	## Rows face the lane, so blocks read as terraced streets instead of scatter.
+	## Near lots stay open; farther blocks terrace. Vacant chowks break the carpet.
 	var along_x := (_rng.randi() % 2) == 0
 	var roll := _rng.randf()
-	if roll < 0.34:
-		_plot_row(px, pz, along_x, 3, radius)
-	elif roll < 0.74:
+	if radius < 75.0:
+		if roll < 0.18:
+			return
+		if roll < 0.72:
+			_plot_single(px, pz, radius)
+		else:
+			_plot_row(px, pz, along_x, 2, radius)
+		return
+	if roll < 0.16:
+		return
+	if roll < 0.58:
 		_plot_row(px, pz, along_x, 2, radius)
 	else:
 		_plot_single(px, pz, radius)
 
 
 func _plot_row(px: float, pz: float, along_x: bool, count: int, radius: float) -> void:
-	var span := 13.4
+	count = mini(count, 2)
+	var span := 14.2
 	var step := span / float(count)
-	var footprint := step * 0.95
+	var footprint := maxf(8.6, step * 0.92)
 	var yaw := (0.0 if along_x else PI * 0.5) + _rng.randf_range(-0.03, 0.03)
 	for i in count:
 		var off := (float(i) - (float(count) - 1.0) * 0.5) * step
@@ -513,9 +750,9 @@ func _plot_row(px: float, pz: float, along_x: bool, count: int, radius: float) -
 		var kit := _street_kit(radius, false)
 		if kit == null:
 			continue
-		var h := maxf(7.0, _kit_height(kit) * _rng.randf_range(0.58, 1.32))
-		if _rng.randf() < 0.12:
-			h *= _rng.randf_range(1.15, 1.45)
+		var h := maxf(11.5, _kit_height(kit) * _rng.randf_range(0.92, 1.28))
+		if _rng.randf() < 0.10:
+			h *= _rng.randf_range(1.12, 1.32)
 		_place_kit_building(kit, Vector3(x, 0.0, z), h, yaw, footprint, 0.25)
 
 
@@ -523,11 +760,11 @@ func _plot_single(px: float, pz: float, radius: float) -> void:
 	var kit := _street_kit(radius, true)
 	if kit == null:
 		return
-	var footprint := _rng.randf_range(11.0, 13.0)
+	var footprint := _rng.randf_range(12.0, 14.5)
 	var yaw := float(_rng.randi() % 4) * PI * 0.5 + _rng.randf_range(-0.04, 0.04)
-	var h := _kit_height(kit) * _rng.randf_range(0.85, 1.22)
-	if _rng.randf() < 0.14:
-		h *= _rng.randf_range(1.2, 1.55)
+	var h := maxf(12.0, _kit_height(kit) * _rng.randf_range(0.95, 1.28))
+	if _rng.randf() < 0.12:
+		h *= _rng.randf_range(1.12, 1.38)
 	_place_kit_building(kit, Vector3(px, 0.0, pz), h, yaw, footprint, 0.3)
 
 
@@ -538,8 +775,6 @@ func _street_kit(radius: float, allow_tower: bool) -> PackedScene:
 			_tower_budget -= 1
 			return tower
 	var roll := _rng.randf()
-	if roll < 0.14 and not _kit_neon.is_empty():
-		return _pick(_kit_neon)
 	if roll < 0.40 and not _kit_story2.is_empty():
 		return _pick(_kit_story2)
 	if roll < 0.58 and not _kit_shops.is_empty():
@@ -556,14 +791,12 @@ func _kit_height(kit: PackedScene) -> float:
 	if "palace" in path:
 		return _rng.randf_range(18.0, 24.0)
 	if "two-story" in path or "two+story" in path:
-		return _rng.randf_range(8.5, 14.0)
-	if "neon" in path:
-		return _rng.randf_range(7.5, 13.0)
+		return _rng.randf_range(12.5, 16.5)
 	if "shop" in path:
-		return _rng.randf_range(7.0, 14.5)
+		return _rng.randf_range(11.5, 15.5)
 	if "blue" in path:
-		return _rng.randf_range(11.0, 26.0)
-	return _rng.randf_range(9.0, 24.0)
+		return _rng.randf_range(13.0, 20.0)
+	return _rng.randf_range(12.0, 16.5)
 
 
 func _try_place_kit(scene: PackedScene, feet: Vector3, h: float, yaw: float, footprint: float = -1.0, allow_window: bool = false) -> void:
@@ -582,7 +815,14 @@ func _in_kite_window(x: float, z: float, radius: float) -> bool:
 	if dz < 8.0:
 		return false
 	var ang := absf(atan2(dx, dz))
-	return radius < 95.0 and ang < deg_to_rad(36.0)
+	return radius < 110.0 and ang < deg_to_rad(40.0)
+
+
+func _is_front_chowk(x: float, z: float) -> bool:
+	## Dirt court in front of the terrace — keep it for flying, not a grove.
+	if z >= 90.0 or z < 16.0:
+		return false
+	return absf(x) < 34.0
 
 
 func _add_far_kit_city() -> void:
@@ -590,16 +830,13 @@ func _add_far_kit_city() -> void:
 	var cheap: Array[PackedScene] = []
 	cheap.append_array(_kit_houses)
 	cheap.append_array(_kit_shops)
-	cheap.append_array(_kit_neon)
 	cheap.append_array(_kit_mid)
 	if cheap.is_empty():
 		return
-	## Keep the city solid out to the fog line (~640 m) so it reads as one dense
-	## metropolis dissolving into haze. Nothing is built past the fog since it
-	## would be invisible — that keeps startup fast.
-	_fill_far_ring(cheap, 210.0, 380.0, 21.0, 0.02, 14.0, 34.0, 15.0, 21.0)
-	_fill_far_ring(cheap, 380.0, 560.0, 26.0, 0.03, 13.0, 32.0, 18.0, 26.0)
-	_fill_far_ring(cheap, 560.0, 720.0, 28.0, 0.03, 12.0, 30.0, 18.0, 28.0)
+	## Horizon stays a city, with gaps so it reads as mohallas, not a brick.
+	_fill_far_ring(cheap, 210.0, 380.0, 26.0, 0.16, 14.0, 34.0, 15.0, 21.0)
+	_fill_far_ring(cheap, 380.0, 560.0, 32.0, 0.22, 13.0, 32.0, 18.0, 26.0)
+	_fill_far_ring(cheap, 560.0, 720.0, 38.0, 0.28, 12.0, 30.0, 18.0, 28.0)
 	_plug_forward_horizon(cheap)
 
 
@@ -607,33 +844,32 @@ func _scatter_far_greenery() -> void:
 	## Break up the far ground with clumps of the tree kits so the distant map
 	## reads as a lived-in city, not bare lots. Cheap: no collision, far-draw
 	## fade, no shadows, and never in the open kite window.
-	var kits: Array[PackedScene] = [KIT_TREE_DENSE, KIT_TREE, KIT_TREE_ORANGE, KIT_TREE_BIG, KIT_TREE_STYL]
+	var kits: Array[PackedScene] = [KIT_TREE_DENSE, KIT_TREE_ORANGE, KIT_TREE_BIG, KIT_TREE_STYL]
 	var hub := Vector3(0.0, 0.0, 92.0)
-	var r := 165.0
+	var r := 220.0
 	var ring := 0
 	while r < 640.0:
-		var spacing := 28.0
-		var count := maxi(10, int((TAU * r) / spacing))
+		var spacing := 40.0
+		var count := maxi(8, int((TAU * r) / spacing))
 		var twist := float(ring) * 0.27
 		for i in count:
-			if _rng.randf() < 0.42:
+			if _rng.randf() < 0.70:
 				continue
 			var ang := twist + (float(i) / float(count)) * TAU
 			var rad := r + _rng.randf_range(-spacing * 0.32, spacing * 0.32)
 			var x := hub.x + sin(ang) * rad
 			var z := hub.z - cos(ang) * rad
 			var radius := Vector2(x, z - 92.0).length()
-			if _in_kite_window(x, z, radius):
+			if _in_kite_window(x, z, radius) or _is_front_chowk(x, z):
 				continue
 			var kit: PackedScene = kits[_rng.randi_range(0, kits.size() - 1)]
 			var h := _rng.randf_range(10.5, 16.0)
-			## Occasional tight pair so it clumps like real greenery.
-			var reps := 2 if _rng.randf() < 0.28 else 1
+			var reps := 2 if _rng.randf() < 0.14 else 1
 			for _k in reps:
-				var jx := 0.0 if _k == 0 else _rng.randf_range(-6.0, 6.0)
-				var jz := 0.0 if _k == 0 else _rng.randf_range(-6.0, 6.0)
+				var jx := 0.0 if _k == 0 else _rng.randf_range(-5.0, 5.0)
+				var jz := 0.0 if _k == 0 else _rng.randf_range(-5.0, 5.0)
 				_place_far_tree(kit, Vector3(x + jx, 0.0, z + jz), h, _rng.randf_range(0.0, TAU))
-		r += spacing * 1.35
+		r += spacing * 1.45
 		ring += 1
 
 
@@ -686,21 +922,21 @@ func _fill_far_ring(kits: Array[PackedScene], r0: float, r1: float, spacing: flo
 			var footprint := _rng.randf_range(fp_lo, fp_hi)
 			var yaw := float(_rng.randi() % 4) * PI * 0.5 + _rng.randf_range(-0.06, 0.06)
 			_place_kit_building(kit, Vector3(x, 0.0, z), h, yaw, footprint, -1.0, false)
-		r += spacing * 0.88
+		r += spacing * 1.10
 		ring += 1
 
 
 func _plug_forward_horizon(kits: Array[PackedScene]) -> void:
 	## Close the street vanishing point with mid-rise blocks behind the clock
 	## tower. Only as deep as the fog reaches — past that it would be invisible.
-	var cell := 18.0
+	var cell := 20.0
 	for ix in range(-8, 9):
-		for iz in range(0, 17):
+		for iz in range(0, 13):
 			var x := float(ix) * cell + _rng.randf_range(-2.5, 2.5)
 			var z := -118.0 - float(iz) * cell + _rng.randf_range(-2.0, 2.0)
 			if absf(x) < 11.0 and z > -175.0:
 				continue
-			if _rng.randf() < 0.08:
+			if _rng.randf() < 0.24:
 				continue
 			var kit := _pick(kits)
 			if kit == null:
@@ -774,7 +1010,7 @@ func _horizon_hill_ring(radius: float, height: float, columns: float, hscale: fl
 
 
 func _scan_building_kits() -> Array[PackedScene]:
-	var kits: Array[PackedScene] = [KIT_BLUE, KIT_TALL, KIT_MASJID, KIT_HOUSE, KIT_SHOP, KIT_NEON, KIT_CLOCK, KIT_STORY2, KIT_PALACE]
+	var kits: Array[PackedScene] = [KIT_BLUE, KIT_TALL, KIT_MASJID, KIT_HOUSE, KIT_SHOP, KIT_CLOCK, KIT_STORY2, KIT_PALACE]
 	var seen: Dictionary = {}
 	for sc in kits:
 		seen[sc.resource_path] = true
@@ -808,18 +1044,15 @@ func _place_kit_building(scene: PackedScene, feet: Vector3, target_h: float, yaw
 	if aabb.size.y < 0.2:
 		node.queue_free()
 		return false
-	if footprint < 4.0:
-		footprint = clampf(target_h * 0.42, 13.0, 22.0)
-	var path := str(scene.resource_path).to_lower()
-	if "neon" in path:
-		var front := feet.z < 96.0 and absf(feet.x) < 72.0
-		target_h *= 0.68 if front else 0.82
-		footprint = maxf(5.5, footprint * (0.70 if front else 0.82))
-	## Front-view house (pink/warm) and blue kits were stretched too tall.
-	if feet.z < 90.0 and (scene == KIT_BLUE or scene == KIT_HOUSE):
-		target_h *= 0.6
+	if footprint < 8.0:
+		footprint = clampf(target_h * 0.55, 11.0, 18.0)
+	if scene == KIT_HOUSE:
+		target_h = clampf(target_h, 12.0, 18.0)
 	var s_y := target_h / aabb.size.y
 	var s_xz := footprint / maxf(aabb.size.x, aabb.size.z)
+	if scene == KIT_HOUSE or scene == KIT_STORY2:
+		s_y = minf(s_y, s_xz * 1.55)
+		s_y = maxf(s_y, 12.0 / aabb.size.y)
 	node.scale = Vector3(s_xz, s_y, s_xz)
 	node.force_update_transform()
 	aabb = _node_aabb(node)
@@ -840,6 +1073,7 @@ func _place_kit_building(scene: PackedScene, feet: Vector3, target_h: float, yaw
 	if register:
 		building_aabbs.append(world_aabb)
 	_last_kit_aabb = world_aabb
+	_last_kit_node = node
 	if near_hub:
 		_add_box_body(world_aabb.get_center(), world_aabb.size)
 	if scene != KIT_MASJID and scene != KIT_CLOCK and scene != KIT_PALACE:

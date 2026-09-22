@@ -140,7 +140,9 @@ func save_to_disk() -> void:
 
 
 func owns(id: String) -> bool:
-	return owned.has(KiteSkins.clamp_id(id))
+	id = KiteSkins.clamp_id(id)
+	## Free patangs are everyone's from the start.
+	return owned.has(id) or KiteSkins.price_for(id) == 0
 
 
 func buy(id: String) -> bool:
@@ -205,12 +207,21 @@ func award_battle(cut_count: int, won: bool) -> Dictionary:
 	else:
 		battles_lost += 1
 	cuts += n
-	return _apply(add_xp, add_coins)
+	var result := _apply(add_xp, add_coins)
+	result["cuts"] = n
+	result["won"] = won
+	result["finish"] = XP_FINISH
+	result["win_bonus"] = XP_WIN if won else 0
+	result["kind"] = "battle"
+	return result
 
 
 func award_save(dodge_count: int) -> Dictionary:
 	var n := clampi(dodge_count, 0, 8)
-	return _apply(XP_FINISH + n * XP_DODGE, COIN_FINISH + n * COIN_DODGE)
+	var result := _apply(XP_FINISH + n * XP_DODGE, COIN_FINISH + n * COIN_DODGE)
+	result["dodges"] = n
+	result["kind"] = "save"
+	return result
 
 
 func you_card() -> Dictionary:

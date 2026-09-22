@@ -3,8 +3,18 @@ extends Node
 
 ## Living breeze for a rooftop kite. Strength drifts. Heading wanders a little.
 ## Gusts are the only event — they ramp in, peak, and trail off. No lulls.
+##
+## A gust is a front that travels with the wind. It is announced WARN_LEAD
+## seconds before it reaches the flyer's roof (origin); anything upwind feels
+## it earlier, anything downwind — the kite, the far kites, the city — later.
 
 signal gust_began
+## A gust front is on its way; it reaches the roof in `lead` seconds.
+signal gust_warning(lead: float)
+
+const WARN_LEAD := 2.6         ## seconds of warning before a gust reaches the roof
+const FRONT_SPEED := 17.0      ## m/s the gust front rolls across the city
+const GUST_FULL := 4.5         ## gust strength (m/s) counted as a full gust
 
 @export var mean_speed: float = 9.4
 @export var base_drift: float = 2.3
@@ -18,8 +28,12 @@ var time: float = 0.0
 var last_sample: Vector3 = Vector3(0.0, 0.0, -8.4)
 var last_speed: float = 8.4
 var last_heading: float = 0.0
-var gust_amount: float = 0.0
+var gust_amount: float = 0.0       ## at the roof
 var is_gusting: bool = false
+## 0..1 while a gust front is on its way to the roof, 0 otherwise.
+var gust_incoming: float = 0.0
+## Where the flyer stands; gusts are timed to reach this point.
+var origin: Vector3 = Vector3.ZERO
 
 var _noise_base: FastNoiseLite
 var _noise_wander: FastNoiseLite
@@ -46,11 +60,17 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	time += delta
 	_next_gust -= delta
-	if _next_gust <= 0.0:
-		_spawn_gust()
-		_next_gust = randf_range(12.0, 20.0)
+	if _next_gust <= WARN_LEAD:
+		_spawn_gust(_next_gust)
+		_next_gust += randf_range(12.0, 20.0)
+		gust_warning.emit(WARN_LEAD)
 	_age_events(_gusts, delta)
-	gust_amount = _envelope_sum(_gusts)
+	gust_amount = _envelope_sum(_gusts, 0.0)
+	gust_incoming = 0.0
+	for e in _gusts:
+		var age: float = e["age"]
+		if age < 0.0:
+			gust_incoming = maxf(gust_incoming, 1.0 - (-age) / WARN_LEAD)
 	var was_gust := is_gusting
 	is_gusting = gust_amount > 0.22
 	if is_gusting and not was_gust:
@@ -60,7 +80,7 @@ func _physics_process(delta: float) -> void:
 func sample(world_pos: Vector3, near_buildings: float = 0.0, record: bool = true) -> Vector3:
 	var heading := _heading_at()
 	var base := _base_speed()
-	var speed := maxf(base + gust_amount, 0.35)
+	var speed := maxf(base + gust_at(world_pos), 0.35)
 
 	var height_t := clampf((world_pos.y - rooftop_height) / 55.0, 0.0, 1.0)
 	# Low in the window: weaker and choppier. Near zenith: cleaner, stronger push.
@@ -79,6 +99,27 @@ func sample(world_pos: Vector3, near_buildings: float = 0.0, record: bool = true
 		last_speed = speed
 		last_heading = heading
 	return v
+
+
+## Gust strength (m/s) at a point, with the front's travel time folded in.
+func gust_at(world_pos: Vector3) -> float:
+	if _gusts.is_empty():
+		return 0.0
+	var h := _heading_at()
+	var dir := Vector3(sin(h), 0.0, -cos(h))
+	var along := (world_pos - origin).dot(dir)
+	return _envelope_sum(_gusts, along / FRONT_SPEED)
+
+
+## 0..1 gust at a point, for things that just need "how gusty is it here".
+func gust01_at(world_pos: Vector3) -> float:
+	return clampf(gust_at(world_pos) / GUST_FULL, 0.0, 1.0)
+
+
+## Unit direction the wind blows toward, flat.
+func wind_dir() -> Vector3:
+	var h := _heading_at()
+	return Vector3(sin(h), 0.0, -cos(h))
 
 
 func debug_label() -> String:
@@ -117,10 +158,11 @@ func _base_speed() -> float:
 	return mean_speed + n * base_drift
 
 
-func _spawn_gust() -> void:
-	# Ramp in over 1–2 s, a short peak, then a longer trail-off.
+func _spawn_gust(lead: float) -> void:
+	# Ramp in over 1–2 s, a short peak, then a longer trail-off. Born early
+	# (negative age) so the roof gets its warning before the front arrives.
 	_gusts.append({
-		"age": 0.0,
+		"age": -maxf(lead, 0.0),
 		"peak": randf_range(2.8, 6.4),
 		"ramp_in": randf_range(1.15, 2.05),
 		"hold": randf_range(0.35, 0.9),
@@ -132,18 +174,19 @@ func _age_events(events: Array[Dictionary], delta: float) -> void:
 	var i := 0
 	while i < events.size():
 		events[i]["age"] = float(events[i]["age"]) + delta
-		var life: float = float(events[i]["ramp_in"]) + float(events[i]["hold"]) + float(events[i]["ramp_out"])
+		## Kept alive long enough to roll out over the far city.
+		var life: float = float(events[i]["ramp_in"]) + float(events[i]["hold"]) + float(events[i]["ramp_out"]) + 420.0 / FRONT_SPEED
 		if float(events[i]["age"]) >= life:
 			events.remove_at(i)
 		else:
 			i += 1
 
 
-func _envelope_sum(events: Array[Dictionary]) -> float:
+func _envelope_sum(events: Array[Dictionary], delay: float) -> float:
 	var total := 0.0
 	for e in events:
 		total += float(e["peak"]) * _smooth_envelope(
-			float(e["age"]),
+			float(e["age"]) - delay,
 			float(e["ramp_in"]),
 			float(e["hold"]),
 			float(e["ramp_out"])
@@ -153,6 +196,8 @@ func _envelope_sum(events: Array[Dictionary]) -> float:
 
 static func _smooth_envelope(age: float, ramp_in: float, hold: float, ramp_out: float) -> float:
 	## Smoothstep in, hold, smoothstep out. Never a step function.
+	if age <= 0.0:
+		return 0.0
 	if age < ramp_in:
 		var t := clampf(age / maxf(ramp_in, 0.001), 0.0, 1.0)
 		return t * t * (3.0 - 2.0 * t)

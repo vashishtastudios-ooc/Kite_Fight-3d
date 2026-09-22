@@ -1,8 +1,8 @@
 class_name Kite
 extends Node3D
 
-## Single-line fighter patang. Slack = spin and drift. Kheench = dart the nose.
-## Dheel = pay out, sag, and fall. Q can yank it back until it hits the ground.
+## Single-line fighter patang. Idle hangs and sways, then dies if left.
+## Kheench = dart. Dheel = pay out, sag, and tumble. Q yanks it back.
 
 enum Phase { GROUNDED, CLIMB, SPIN, FLY, DHEEL, CUT, CRASHED }
 
@@ -12,9 +12,7 @@ const LINE_START := 18.0
 const CLIMB_SPEED := 9.0
 const FLY_SPEED := 22.0
 const SKY_ALT := 26.0
-const NEAR_DIST := 26.0
-const IDLE_SPIN_NEAR := TAU / 0.85
-const IDLE_SPIN_HIGH := TAU / 1.35
+const IDLE_AIR_SPAN := 36.0     ## altitude where idle air becomes clean enough to sit
 ## Idle (no kheench): the line goes slack, the kite loses lift and settles
 ## down-wind on a slow glide. Tune the feel here.
 const IDLE_SLACK_MAX := 0.62       ## how loose the manjha gets when left alone
@@ -26,14 +24,36 @@ const IDLE_DRIFT_LO := 0.45        ## down-wind push at a taut line
 const IDLE_DRIFT_HI := 1.15        ## down-wind push when fully slack (a loose sail)
 const IDLE_HEIGHT_SPAN := 45.0     ## altitude over which the layer blend runs
 const IDLE_GROUND_SOFT := 9.0      ## metres over the deck where the sink eases off
+## Low, dirty roof air: a loose tailless fighter can't hang there — it wheels.
+const WHEEL_RATE := TAU * 2.2      ## peak turns/s in the roof air (avg ≈1.3 after churn/dwell)
+const WHEEL_SPINUP := 0.35         ## s after releasing Q before it is fully wheeling
+const WHEEL_UP_DWELL := 0.5        ## rate multiplier as the nose sweeps straight up
+const WHEEL_LOOP := 2.6            ## m/s the nose drags the kite round each turn
 const LINE_SEGS := 28
 const TAIL_LEN := 18
 const TAIL_SEG := 0.24
 const KITE_SPAN := 1.55
+## Wind is the engine, never a brake. A dart runs at FLY_SPEED at the edge of
+## the wind window and up to POWER_ZONE faster in its heart (downwind, a third
+## of the way up the sky). A gust at the kite adds up to GUST_SURGE more and
+## lifts it.
+const POWER_ZONE := 0.15
+const POWER_ZONE_ELEV := 0.55     ## rad above the horizon of the window's heart
+const GUST_SURGE := 0.3
+const GUST_LIFT := 4.0            ## m/s of climb in a full gust
 const KITE_SHADER := preload("res://shaders/kite.gdshader")
+const SPAR_SHADER := preload("res://shaders/kite_spar.gdshader")
+const RIM_SHADER := preload("res://shaders/kite_rim.gdshader")
+## Peak of the arched kaman on the spine — must match KAMAN_PEAK in patang.gdshaderinc.
+const KAMAN_PEAK := 0.30
+const FLEX_GRID := 12              ## subdivisions per sail quarter
+const FLEX_STIFF := 150.0          ## spring stiffness of the tug
+const FLEX_DAMP := 11.0            ## damping — ~20% overshoot, settles in ~0.4 s
+const FLEX_KICK := 7.5             ## velocity added by a Q yank
 const RIBBON_SHADER := preload("res://shaders/kite_ribbon.gdshader")
 const TRAIL_SHADER := preload("res://shaders/kite_trail.gdshader")
 const FLARE_SHADER := preload("res://shaders/rocket_flare.gdshader")
+const PAPER_STREAM := preload("res://assets/audio/pure_phad_phad_paper_only.wav")
 const KiteSkins := preload("res://scripts/kite_skins.gd")
 const NOSE_MESH_H := 0.26
 
@@ -50,6 +70,24 @@ var _fight_t: float = 0.0
 const PIPS_MAX := 3
 const DASH_TIME := 0.88
 
+## Pech swipe: how fast this string slices sideways. A darting kite swings
+## its whole string through the sky; E pays line out, which slides it too.
+const DHEEL_SLICE := 11.0          ## m/s a running firki counts as
+## Letting go of E: the kite settles back into its hover by itself. A tap is
+## a quick duck; the longer the let-out, the longer the wobble before it holds.
+const DHEEL_SETTLE_TAP := 0.22
+const DHEEL_SETTLE_LONG := 0.9
+const DHEEL_LONG := 1.5            ## seconds of E counted as a long let-out
+var _dheel_t: float = 0.0
+var _settle_t: float = 0.0
+
+## AI thumka: a practised flyer flicks the nose round on purpose instead of
+## waiting for the air to roll it. Only the rival uses this.
+const STEER_RATE := 3.2            ## rad/s the nose can be flicked round
+var _steer_on: bool = false
+var _steer_heading: float = 0.0
+var _line_mid: Vector3 = Vector3.ZERO
+
 const WindSys := preload("res://scripts/wind_system.gd")
 const CityGen := preload("res://scripts/city_generator.gd")
 
@@ -65,8 +103,12 @@ var spin_dir: float = 1.0
 var elevation: float = 0.0
 var manjha: float = 1.0
 var is_ai: bool = false
+## The other flyer's kite (AI or online). Paper kites carry no outline, except
+## the rival's, which keeps a faint rim once it is far off so you can find it.
+var is_rival: bool = false
 var sail_id: String = KiteSkins.SAFFRON
 var viewer_pos: Vector3 = Vector3.ZERO
+var _eye: Vector3 = Vector3.ZERO
 var hand_pos: Vector3 = Vector3.ZERO
 ## Metres of line paid this second (firki + wind). HUD and spool use this.
 var payout_rate: float = 0.0
@@ -80,6 +122,14 @@ var _bias: float = 0.0
 var _fly_heading: float = 0.35
 var _climb_t: float = 0.0
 var _bob_t: float = 0.0
+var _idle_t: float = 0.0
+var _idle_stall: float = 0.0
+var _wheel: float = 0.0
+var _flex_on: bool = false
+var _tug: float = 0.0
+var _tug_v: float = 0.0
+var _flex_mats: Array[ShaderMaterial] = []
+var _outline_smat: ShaderMaterial
 var _cut_tumble: float = 0.0
 var _sail_colors: Array[Color] = []
 var _line_pink: bool = true
@@ -108,6 +158,7 @@ var _trail_imm: ImmediateMesh
 var _trail_mat: ShaderMaterial
 var _trail_pts: Array[Vector3] = []
 var _trail_age: Array[float] = []
+var _paper: AudioStreamPlayer3D
 const TRAIL_LIFE := 0.58
 const TRAIL_MAX := 44
 
@@ -145,6 +196,8 @@ func park_on_roof() -> void:
 	dash_t = 0.0
 	_kheench = false
 	_dheel = false
+	_idle_t = 0.0
+	_idle_stall = 0.0
 	global_position = hand_pos + Vector3(0.4, 0.2, -0.7)
 	_reset_tail()
 	_clear_speed_trail()
@@ -168,6 +221,8 @@ func launch() -> void:
 	line_length = LINE_START
 	_kheench = false
 	_dheel = false
+	_idle_t = 0.0
+	_idle_stall = 0.0
 	var w := _wind_at(hand_pos + Vector3(0.0, 3.0, -4.0))
 	var downwind := Vector3(w.x, 0.0, w.z)
 	if downwind.length() < 0.2:
@@ -200,9 +255,13 @@ func set_kheench(held: bool) -> void:
 			pips_changed.emit(pips)
 		# A real kheench is a short yank, not winding the firki home.
 		line_length = maxf(LINE_MIN, line_length - 1.6)
+		## The yank snaps the paper taut: kick the flex spring.
+		_tug_v += FLEX_KICK
 		_enter_fly()
 		_burst_speed_fx()
+		_play_paper()
 	else:
+		_stop_paper()
 		if phase == Phase.FLY:
 			_enter_spin()
 
@@ -221,7 +280,10 @@ func set_dheel(held: bool) -> void:
 			return
 		phase = Phase.DHEEL
 		slack = maxf(slack, 0.35)
-	## Release stops the firki. The kite keeps sagging until Q or the ground.
+		_dheel_t = 0.0
+	else:
+		## Release stops the firki; the kite wobbles, then catches the air again.
+		_settle_t = lerpf(DHEEL_SETTLE_TAP, DHEEL_SETTLE_LONG, clampf(_dheel_t / DHEEL_LONG, 0.0, 1.0))
 
 
 func kill_by_rocket() -> void:
@@ -240,6 +302,7 @@ func apply_cut() -> void:
 	phase = Phase.CUT
 	_kheench = false
 	_dheel = false
+	_stop_paper()
 	slack = 1.0
 	tension = 0.0
 	pull = 0.0
@@ -254,13 +317,27 @@ func apply_cut() -> void:
 	cut_down.emit()
 
 
-func damage_manjha(amount: float) -> void:
+func damage_manjha(amount: float, fatal: bool = true) -> void:
 	if phase == Phase.CUT or phase == Phase.GROUNDED:
 		return
 	manjha = clampf(manjha - amount, 0.0, 1.0)
 	manjha_changed.emit(manjha)
-	if manjha <= 0.0:
+	if fatal and manjha <= 0.0:
 		apply_cut()
+
+
+func mend_manjha(amount: float) -> void:
+	if phase == Phase.CUT or manjha >= 1.0:
+		return
+	manjha = minf(1.0, manjha + amount)
+	manjha_changed.emit(manjha)
+
+
+func restore_manjha() -> void:
+	if phase == Phase.CUT or phase == Phase.GROUNDED or phase == Phase.CRASHED:
+		return
+	manjha = 1.0
+	manjha_changed.emit(manjha)
 
 
 func add_pip() -> void:
@@ -278,6 +355,59 @@ func is_dashing() -> bool:
 
 func is_kheenching() -> bool:
 	return _kheench
+
+
+func is_biting() -> bool:
+	return _kheench and slack < 0.42 and is_airborne() and phase != Phase.CUT
+
+
+## Point the nose along a sky direction (AI only). Call stop_steer() to let go.
+func steer_nose(dir: Vector3) -> void:
+	var a := _sky_axes()
+	var r: Vector3 = a["right"]
+	var u: Vector3 = a["up"]
+	_steer_heading = atan2(dir.dot(r), dir.dot(u))
+	_steer_on = true
+
+
+func stop_steer() -> void:
+	_steer_on = false
+
+
+func is_dheeling() -> bool:
+	return _dheel and is_airborne() and phase != Phase.CUT
+
+
+## Sideways speed of the string: the kite's motion across its own line.
+func slice_speed() -> float:
+	if not is_airborne() or phase == Phase.CUT:
+		return 0.0
+	var along := global_position - hand_pos
+	var across := velocity
+	if along.length_squared() > 0.01:
+		along = along.normalized()
+		across = velocity - along * velocity.dot(along)
+	var v := across.length()
+	if _dheel:
+		v = maxf(v, DHEEL_SLICE)
+	return v
+
+
+## The string as drawn: a sagging curve.
+func line_points(n: int) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	out.resize(n + 1)
+	for i in n + 1:
+		out[i] = line_point(float(i) / float(n))
+	return out
+
+
+func line_point(t: float) -> Vector3:
+	var a := hand_pos
+	var b := global_position
+	if _line_mid == Vector3.ZERO:
+		return a.lerp(b, t)
+	return _bezier(a, _line_mid, b, t)
 
 
 func is_cut_ready() -> bool:
@@ -318,6 +448,8 @@ func pack_net() -> Dictionary:
 		"heading": heading,
 		"dash": dash_t,
 		"pips": pips,
+		"q": 1 if _kheench else 0,
+		"e": 1 if _dheel else 0,
 	}
 
 
@@ -331,6 +463,8 @@ func apply_net(d: Dictionary, delta: float) -> void:
 	heading = float(d.get("heading", heading))
 	dash_t = float(d.get("dash", 0.0))
 	pips = int(d.get("pips", pips))
+	_kheench = int(d.get("q", 0)) != 0
+	_dheel = int(d.get("e", 0)) != 0
 	visible = true
 	_orient_body(delta)
 	_update_readability()
@@ -343,6 +477,7 @@ func tick(delta: float, hand: Vector3, viewer: Vector3, reel: float, bias: float
 	viewer_pos = viewer
 	_bias = clampf(bias, -1.0, 1.0)
 	_bob_t += delta
+	_update_flex(delta)
 	if _kheench or _dheel:
 		steered_t = 0.55
 	else:
@@ -401,6 +536,9 @@ func tick(delta: float, hand: Vector3, viewer: Vector3, reel: float, bias: float
 			_tick_fly(delta, w)
 		Phase.DHEEL:
 			_tick_dheel(delta, w)
+	if phase != Phase.SPIN:
+		_wheel = move_toward(_wheel, 0.0, delta * 4.0)
+	_update_wheel_audio()
 
 	_constrain_line(delta)
 	if _dheel and phase != Phase.CUT and phase != Phase.CRASHED:
@@ -422,31 +560,27 @@ func _enter_fly() -> void:
 	slack = 0.0
 	_fly_heading = heading
 	var nose := nose_dir()
-	var kick := FLY_SPEED
-	var w := _wind_at(global_position)
-	var along := w.dot(nose)
-	kick += clampf(along * 0.18, -2.5, 3.5)
+	var kick := FLY_SPEED * _wind_power()
 	if dash_t > 0.0:
 		kick *= 2.0
 	velocity = nose * kick + Vector3.UP * 2.2
 	tension = 28.0
+	_idle_t = 0.0
+	_idle_stall = 0.0
 
 
 func _enter_spin() -> void:
 	phase = Phase.SPIN
-	ang_vel = _idle_spin_rate() * spin_dir
-	slack = 0.12
+	slack = maxf(slack, 0.12)
 	tension = 4.0
+	_idle_t = 0.0
+	_idle_stall = 0.0
 
 
-func _idle_spin_rate() -> float:
-	## Faster tumble near the roof; slower and lazier up high.
-	var alt := altitude()
-	var hd := horiz_dist()
-	var near := 1.0 - clampf(hd / NEAR_DIST, 0.0, 1.0)
-	var low := 1.0 - clampf(alt / SKY_ALT, 0.0, 1.0)
-	var blend := clampf(0.2 + near * 0.45 + low * 0.55, 0.0, 1.0)
-	return lerpf(IDLE_SPIN_HIGH, IDLE_SPIN_NEAR, blend)
+func _idle_air() -> float:
+	## 0 = dirty roof layer (wants up, cannot hold). 1 = clean high air.
+	var t := clampf(altitude() / IDLE_AIR_SPAN, 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
 
 
 func altitude() -> float:
@@ -481,7 +615,9 @@ func _tick_climb(delta: float, w: Vector3) -> void:
 	var up := Vector3(w.x * 0.28, CLIMB_SPEED, w.z * 0.28)
 	velocity = velocity.lerp(up, 2.4 * delta)
 	global_position += velocity * delta
-	heading = lerp_angle(heading, 0.4, 2.0 * delta)
+	## Fighting up through the roof air: it waggles, it doesn't rise like a lift.
+	var waggle := sin(_bob_t * 6.3) * 0.30 + sin(_bob_t * 11.0) * 0.10
+	heading = lerp_angle(heading, 0.4 + waggle, 4.0 * delta)
 	ang_vel = 0.0
 	slack = 0.0
 	if _climb_t > 0.5 and altitude() > 5.5:
@@ -495,41 +631,113 @@ func _tick_spin(delta: float, w: Vector3) -> void:
 	if _dheel:
 		phase = Phase.DHEEL
 		return
-	var rate := _idle_spin_rate()
-	## Light left/right only while slack: nudge the nose before the next tug.
-	if absf(_bias) > 0.08:
-		spin_dir = signf(_bias)
-		rate += absf(_bias) * 1.4
-		heading += _bias * 2.4 * delta
-	ang_vel = move_toward(ang_vel, rate * spin_dir, 11.0 * delta)
-	heading += ang_vel * delta
 
-	## Left alone, the line pays no tension: it sags and the kite loses lift.
-	slack = move_toward(slack, IDLE_SLACK_MAX, IDLE_SLACK_RATE * delta)
-	tension = move_toward(tension, lerpf(9.0, 2.0, slack), delta * 8.0)
+	var air := _idle_air()
+	_idle_t += delta
+	## Dirty roof air: the paper can't hold its nose up, so it wheels. Clean
+	## high air lets it hang and sway. Buildings close by churn it harder.
+	var chop_b := city.nearest_building_chop(global_position) if city else 0.0
+	var rough := clampf((1.0 - air) * (0.95 + 0.3 * chop_b), 0.0, 1.0)
+	var spin_up := clampf(_idle_t / WHEEL_SPINUP, 0.0, 1.0)
+	spin_up = spin_up * spin_up * (3.0 - 2.0 * spin_up)
+	var wheel := rough * spin_up
+	_wheel = wheel
+	## Living hang, then the hover dies. Low/slow air dies first.
+	var hang := lerpf(2.0, 7.2, air)
+	var die := lerpf(5.0, 13.0, air)
+	var stall := 0.0
+	if _idle_t > hang:
+		var u := clampf((_idle_t - hang) / maxf(die - hang, 0.5), 0.0, 1.0)
+		stall = u * u * (3.0 - 2.0 * u)
+	_idle_stall = stall
+
+	var slack_max := lerpf(IDLE_SLACK_MAX, 0.88, stall)
+	slack = move_toward(slack, slack_max, IDLE_SLACK_RATE * (1.0 + stall * 0.8) * delta)
+	tension = move_toward(tension, lerpf(9.0, 1.2, slack), delta * 8.0)
 
 	var a := _sky_axes()
 	var right: Vector3 = a["right"]
 	var up: Vector3 = a["up"]
-	var orbit := right * cos(heading) * 1.15 + up * sin(heading) * 0.32
+	var wind_hz := Vector3(w.x, 0.0, w.z)
+	var lat := 0.0
+	if wind_hz.length() > 0.15:
+		lat = clampf(wind_hz.dot(right) / 9.4, -1.0, 1.0)
+	var gust := wind.gust_at(global_position) if wind else 0.0
+	if wheel >= 0.3:
+		## Once wheeling it keeps its turn; only your hand can reverse it.
+		if absf(_bias) > 0.12:
+			spin_dir = signf(_bias)
+	elif stall < 0.18:
+		if absf(lat) > 0.14:
+			spin_dir = signf(lat)
+		elif absf(_bias) > 0.12:
+			spin_dir = signf(_bias)
 
-	## Wind layer: weak/choppy near the roof, strong/clean up high (from sample()).
+	var sway_amp := lerpf(0.62, 0.18, air)
+	var lean_lim := lerpf(0.95, 0.40, air)
+	var wander := sin(_bob_t * lerpf(1.85, 1.15, air) + lat * 0.4)
+	var chop := sin(_bob_t * lerpf(4.6, 2.2, air)) * sin(_bob_t * 0.73)
+	var home := lat * sway_amp * 0.40
+	home += wander * sway_amp * 0.70
+	home += chop * sway_amp * lerpf(0.85, 0.18, air)
+	var gust_lean := clampf(gust * 0.055, 0.0, 0.22)
+	if absf(lat) > 0.08:
+		home += gust_lean * signf(lat)
+	else:
+		home += gust_lean * signf(wander if absf(wander) > 0.05 else spin_dir)
+	## Untended: nose droops, then a slow roll. Not a parked weathercock.
+	home += stall * lerpf(1.55, 0.80, air) * spin_dir
+	var lim := lerpf(lean_lim, PI * 0.94, stall)
+	home = clampf(home, -lim, lim)
+
+	var center := lerpf(0.14, 0.42, air) * (1.0 - stall * 0.9) * (1.0 - wheel)
+	var roll := stall * stall * lerpf(0.92, 0.26, air) * spin_dir
+	## Wheel rate: surges and stutters with the churn, and slows as the nose
+	## sweeps up — the paper catches the wind for a beat. That beat is the
+	## window to time a Q.
+	var surge := 0.86 + 0.24 * sin(_bob_t * 3.1 + chop_b * 2.0) + 0.16 * sin(_bob_t * 7.7)
+	var near_up := 1.0 - smoothstep(0.2, 1.0, absf(heading))
+	var wheel_rate := WHEEL_RATE * wheel * maxf(surge, 0.35)
+	wheel_rate *= lerpf(1.0, WHEEL_UP_DWELL, near_up) * lerpf(0.8, 1.1, slack)
+	if gust > 0.22:
+		wheel_rate *= 1.0 + gust * 0.12
+	var ang_target := spin_dir * wheel_rate + roll * (1.0 - wheel)
+	ang_vel = move_toward(ang_vel, ang_target, lerpf(lerpf(2.0, 6.5, air), 16.0, wheel) * delta)
+	heading = lerp_angle(heading, home, clampf(center * delta, 0.0, 1.0))
+	heading += ang_vel * delta
+	if gust > 0.28:
+		heading += spin_dir * gust * (0.06 + stall * 0.12) * delta
+	if _steer_on:
+		ang_vel = move_toward(ang_vel, 0.0, 8.0 * delta)
+		heading = rotate_toward(heading, _steer_heading, STEER_RATE * delta)
+	heading = wrapf(heading, -PI, PI)
+	if not _steer_on and stall < 0.32 and wheel < 0.2 and absf(heading) > lean_lim:
+		heading = move_toward(heading, signf(heading) * lean_lim * 0.92, 2.4 * delta)
+
 	var alt := altitude()
 	var height_t := clampf(alt / IDLE_HEIGHT_SPAN, 0.0, 1.0)
-	## A slack kite is just a loose sail — the wind carries it down-wind. The
-	## push grows as the line goes slack, and the high-altitude wind is already
-	## stronger in w, so it naturally drifts faster near the zenith.
 	var downwind := Vector3(w.x, 0.0, w.z) * lerpf(IDLE_DRIFT_LO, IDLE_DRIFT_HI, slack)
 	downwind += right * _bias * 1.6
-	var target := downwind + orbit
-	target.y += sin(_bob_t * 2.2) * 0.25  ## a little flutter, not lift
-	velocity = velocity.lerp(target, 2.1 * delta)
+	var slide := right * sin(heading) * lerpf(1.35, 0.55, air)
+	var bob := up * (sin(_bob_t * 2.1) * lerpf(0.42, 0.16, air) + sin(_bob_t * 3.4) * lerpf(0.20, 0.05, air))
+	bob *= (1.0 - stall * 0.75)
+	if gust > 0.22:
+		bob += Vector3.UP * gust * 0.08 * (1.0 - stall)
+		slide += right * lat * gust * 0.08
+	## Wheeling, the nose drags the kite round a small loop every turn — it
+	## thrashes in place rather than pivoting like a propeller.
+	var loop := nose_dir() * WHEEL_LOOP * wheel * (1.0 - slack * 0.45)
+	var target := downwind + slide * (1.0 - wheel * 0.6) + bob * (1.0 - wheel * 0.7) + loop
+	target.y += sin(_bob_t * 2.2) * 0.12 * (1.0 - stall * 0.6)
+	velocity = velocity.lerp(target, lerpf(lerpf(2.1, 1.35, stall), 3.4, wheel) * delta)
 
-	## Gravity-fed sink, scaled by how slack the line is and by the air layer.
-	## The lerp above damps it to a steady terminal glide, so it never nose-dives.
 	var sink_mul := lerpf(IDLE_SINK_LOW_MUL, IDLE_SINK_HIGH_MUL, height_t)
 	var ground_soft := clampf(alt / IDLE_GROUND_SOFT, 0.35, 1.0)
-	velocity.y -= IDLE_SINK * slack * sink_mul * ground_soft * delta
+	ground_soft = lerpf(ground_soft, 1.0, stall)
+	var stall_sink := 1.0 + stall * lerpf(2.6, 1.2, air)
+	velocity.y -= IDLE_SINK * slack * sink_mul * ground_soft * stall_sink * delta
+	if gust > 0.22:
+		velocity.y -= gust * lerpf(0.85, 0.28, air) * (0.25 + stall * 0.9) * delta
 
 	global_position += velocity * delta
 
@@ -550,13 +758,16 @@ func _tick_fly(delta: float, w: Vector3) -> void:
 	var climb_bias := lerpf(-0.05, 0.28, room)
 	if altitude() > SKY_ALT * 0.85:
 		climb_bias *= 0.35
-	var wind_dir := Vector3(w.x, 0.0, w.z)
-	var wind_mul := 1.0
-	if wind_dir.length() > 0.25:
-		wind_mul = lerpf(0.94, 1.08, clampf(nose.dot(wind_dir.normalized()) * 0.5 + 0.5, 0.0, 1.0))
+	## A dart goes where the nose points, at full speed whichever way the wind
+	## blows — the wind only ever adds (power zone, gusts), never shoves.
 	var dash_mul := 2.0 if dash_t > 0.0 else 1.0
-	var cruise := nose * FLY_SPEED * wind_mul * dash_mul + Vector3(0.0, climb_bias * FLY_SPEED * dash_mul, 0.0)
-	cruise += w * 0.22
+	var speed := FLY_SPEED * _wind_power() * dash_mul
+	var cruise := nose * speed + Vector3(0.0, climb_bias * FLY_SPEED * dash_mul, 0.0)
+	var g := _gust01()
+	if g > 0.02:
+		## Gust: the kite surges and climbs, with a tremble in the paper.
+		cruise.y += g * GUST_LIFT
+		heading += sin(_bob_t * 16.0) * 0.01 * g * delta
 	cruise += Vector3(sin(_bob_t * 7.0), cos(_bob_t * 5.4), sin(_bob_t * 6.1)) * 0.7
 	velocity = velocity.lerp(cruise, 8.2 * delta)
 	global_position += velocity * delta
@@ -567,7 +778,16 @@ func _tick_dheel(delta: float, w: Vector3) -> void:
 	if _kheench:
 		_enter_fly()
 		return
-	slack = move_toward(slack, 1.0, delta * 1.8)
+	if _dheel:
+		_dheel_t += delta
+		slack = move_toward(slack, 1.0, delta * 1.8)
+	else:
+		## Settling: the line firms up and the sink eases until it hovers.
+		_settle_t -= delta
+		slack = move_toward(slack, 0.3, delta * 1.6)
+		if _settle_t <= 0.0:
+			_enter_spin()
+			return
 	if absf(_bias) > 0.08:
 		spin_dir = signf(_bias)
 		heading += _bias * 1.4 * delta
@@ -605,10 +825,14 @@ func _constrain_line(delta: float) -> void:
 	if dist < LINE_MIN * 0.8 and phase != Phase.DHEEL and not _dheel:
 		global_position = hand_pos + to_kite.normalized() * (LINE_MIN * 0.8)
 	elif dist > max_len:
+		## A taut line only stops the kite flying further out. Across the sky
+		## it keeps full speed — a tight line is where a kite flies sharpest.
 		var n := to_kite / dist
 		var pull_back := (dist - max_len) * clampf(9.0 * delta, 0.0, 1.0)
 		global_position -= n * pull_back
-		velocity *= lerpf(0.9, 0.98, slack)
+		var outward := velocity.dot(n)
+		if outward > 0.0:
+			velocity -= n * outward * lerpf(1.0, 0.6, slack)
 
 
 func _slack_constrain() -> void:
@@ -688,7 +912,13 @@ func _orient_body(delta: float) -> void:
 	elif phase == Phase.DHEEL or phase == Phase.CUT:
 		target = target.rotated(x_axis, 0.28)
 	elif phase == Phase.SPIN:
-		target = target.rotated(face, sin(_bob_t * 6.0) * 0.08)
+		var air := _idle_air()
+		var roll := sin(_bob_t * lerpf(7.5, 3.5, air)) * lerpf(0.16, 0.05, air)
+		roll += _idle_stall * sin(_bob_t * 2.4) * 0.12
+		## Thrashing low: the paper buckles and flutters as it wheels.
+		roll += sin(_bob_t * 21.0) * 0.08 * _wheel
+		target = target.rotated(face, roll)
+		target = target.rotated(x_axis, sin(_bob_t * 13.0) * 0.10 * _wheel)
 	_visual_basis = _visual_basis.orthonormalized().slerp(target, clampf(12.0 * delta, 0.0, 1.0))
 	_body.transform.basis = _visual_basis
 	_body.position = Vector3.ZERO
@@ -701,7 +931,7 @@ func _update_readability() -> void:
 	if _body == null:
 		return
 	_body.scale = Vector3.ONE
-	var dist := viewer_pos.distance_to(global_position)
+	var dist := _eye_pos().distance_to(global_position)
 	var airborne := phase != Phase.GROUNDED and phase != Phase.CRASHED
 	var far := 0.0
 	if airborne:
@@ -713,6 +943,18 @@ func _update_readability() -> void:
 	if heat > 0.04:
 		lift = maxf(lift, 0.22 + heat * 0.55)
 		rim = maxf(rim, 0.35 + heat * 1.1)
+	## Paper kites: no outline. Only the rival keeps a rim, and only far off.
+	## A charged dash still glows on anyone's kite.
+	var paper := KiteSkins.is_patang(sail_id)
+	var outline_a := lerpf(0.22, 0.72, far)
+	var outline_g := lerpf(0.12, 1.15, far)
+	if paper:
+		var far_rim := far * 0.45 if is_rival else 0.0
+		rim = far_rim
+		outline_a = far * 0.55 if is_rival else 0.0
+		outline_g = far * 1.0 if is_rival else 0.0
+		if heat > 0.04:
+			rim = maxf(rim, 0.35 + heat * 1.1)
 	if _sail_mat:
 		_sail_mat.set_shader_parameter("lift", lift)
 		_sail_mat.set_shader_parameter("rim", rim)
@@ -734,11 +976,18 @@ func _update_readability() -> void:
 	if _outline_mat:
 		_outline_mat.albedo_color.a = lerpf(0.22, 0.72, far)
 		_outline_mat.emission_energy_multiplier = lerpf(0.12, 1.15, far)
+	if _outline_smat:
+		_outline_smat.set_shader_parameter("alpha", outline_a)
+		_outline_smat.set_shader_parameter("glow", outline_g)
+	if _outline_mi and paper:
+		_outline_mi.visible = outline_a > 0.01
 	if _nose_marker:
-		var grow := dist * lerpf(0.0034, 0.0056, player_boost)
+		## Small tip pointer: a backup for reading direction when the kite is a
+		## speck; the curved kaman does the work up close.
+		var grow := dist * lerpf(0.0024, 0.0036, player_boost)
 		var s := 1.0
 		if airborne:
-			s = clampf(grow / NOSE_MESH_H, 1.0, 8.5)
+			s = clampf(grow / NOSE_MESH_H, 1.0, 5.0)
 		_nose_marker.scale = Vector3.ONE * s
 		if _nose_mat:
 			_nose_mat.emission_energy_multiplier = lerpf(0.35, 1.6, far)
@@ -764,30 +1013,45 @@ func _update_line() -> void:
 	var wf := Vector3(w.x, 0.0, w.z)
 	if wf.length() > 0.2:
 		mid += wf.normalized() * (length * 0.02 * slack)
+	_line_mid = mid
 	if _line_mat:
 		if _line_pink:
 			_line_mat.albedo_color = Color(1.0, 0.42, 0.72).lerp(Color(1.0, 0.78, 0.92), taut)
 		else:
 			_line_mat.albedo_color = Color(1.0, 0.88, 0.42).lerp(Color(1.0, 0.96, 0.72), taut)
+		var wear := 1.0 - clampf(manjha, 0.0, 1.0)
+		if wear > 0.08:
+			var hot := Color(1.0, 0.93, 0.78)
+			_line_mat.albedo_color = _line_mat.albedo_color.lerp(hot, wear * 0.7)
 		_line_mat.emission = _line_mat.albedo_color
-		_line_mat.emission_energy_multiplier = lerpf(1.8, 2.8, taut)
-	if _line_glow_mat:
+		_line_mat.emission_energy_multiplier = lerpf(1.8, 2.8, taut) + wear * 1.1
+	if _line_glow_mat and _line_mat:
 		_line_glow_mat.albedo_color = Color(_line_mat.albedo_color, 0.22)
 		_line_glow_mat.emission = _line_mat.albedo_color
 		_line_glow_mat.emission_energy_multiplier = lerpf(1.4, 2.2, taut)
-	## Thin thread that still reads at dusk — not a neon beam.
-	var dist_cam := viewer_pos.distance_to((a + b) * 0.5)
-	var r_hand := clampf(dist_cam * 0.000192, 0.00312, 0.009)
-	var r_kite := clampf(dist_cam * 0.000144, 0.0024, 0.00696)
+	## Thin thread that still reads at dusk. Worn manjha reads thinner. Each
+	## end of each piece is sized by its own distance from the eye, so the
+	## string is a hair at your hands and still visible far out.
+	var eye := _eye_pos()
+	var wear_r := lerpf(1.0, 0.48, 1.0 - clampf(manjha, 0.0, 1.0))
+	## Past a quarter worn the glass coat is gone in patches: the thread goes
+	## knotty, thick and thin, so you can see a string that is about to go.
+	var fray := clampf((1.0 - manjha - 0.25) / 0.6, 0.0, 1.0)
 	for i in LINE_SEGS:
 		var t0 := float(i) / float(LINE_SEGS)
 		var t1 := float(i + 1) / float(LINE_SEGS)
-		var p0 := _bezier(a, mid, b, t0)
-		var p1 := _bezier(a, mid, b, t1)
-		var radius := lerpf(r_hand, r_kite, t1)
-		_place_segment(_line_segs[i], _line_cyls[i], p0, p1, radius)
+		var p0 := line_point(t0)
+		var p1 := line_point(t1)
+		var r0 := _thread_radius(eye.distance_to(p0), t0) * wear_r
+		var r1 := _thread_radius(eye.distance_to(p1), t1) * wear_r
+		if fray > 0.0:
+			var h := fposmod(sin(float(i) * 12.9898 + 4.1) * 43758.5453, 1.0)
+			var f := lerpf(1.0, 0.3 if h < 0.4 else 1.25, fray)
+			r0 *= f
+			r1 *= f
+		_place_segment(_line_segs[i], _line_cyls[i], p0, p1, r0, r1)
 		if i < _line_glows.size():
-			_place_segment(_line_glows[i], _line_glow_cyls[i], p0, p1, radius * 1.7)
+			_place_segment(_line_glows[i], _line_glow_cyls[i], p0, p1, r0 * 1.7, r1 * 1.7)
 
 
 func _tail_anchor() -> Vector3:
@@ -827,6 +1091,35 @@ func _reset_tail() -> void:
 	_rebuild_tail_mesh()
 
 
+## 1.0 at the edge of the wind window, up to 1 + POWER_ZONE in its heart,
+## times the gust surge at the kite. Never below 1.
+func _wind_power() -> float:
+	var p := 1.0
+	if wind:
+		var to_kite := global_position - hand_pos
+		if to_kite.length_squared() > 1.0:
+			var d := wind.wind_dir()
+			var heart := (d * cos(POWER_ZONE_ELEV) + Vector3.UP * sin(POWER_ZONE_ELEV)).normalized()
+			var z := smoothstep(0.55, 1.0, to_kite.normalized().dot(heart))
+			p += POWER_ZONE * z
+	return p * (1.0 + GUST_SURGE * _gust01())
+
+
+func _gust01() -> float:
+	return wind.gust01_at(global_position) if wind else 0.0
+
+
+## Where the picture is seen from right now. Sizes that grow with distance
+## (nose pip, string, speed streak) must use this, not the flyer's roof —
+## otherwise the kite cam, a metre behind the kite, draws them roof-sized.
+func _eye_pos() -> Vector3:
+	var vp := get_viewport()
+	var cam := vp.get_camera_3d() if vp else null
+	if cam:
+		return cam.global_position
+	return viewer_pos
+
+
 func _wind_at(pos: Vector3) -> Vector3:
 	if wind == null:
 		return Vector3(0.0, 0.0, -8.0)
@@ -837,12 +1130,66 @@ func _wind_at(pos: Vector3) -> Vector3:
 
 
 func _rim_accent() -> Color:
-	if _sail_colors.is_empty():
+	if _sail_colors.is_empty() and not KiteSkins.is_patang(sail_id):
 		return Color(1.0, 0.84, 0.28)
-	var c: Color = _sail_colors[0]
+	var c: Color = KiteSkins.palette_for(sail_id)[0] if KiteSkins.is_patang(sail_id) else _sail_colors[0]
 	if c.g > c.r + 0.08:
 		return Color(0.72, 1.0, 0.32)
 	return Color(1.0, 0.84, 0.28)
+
+
+func _build_paper_audio() -> void:
+	if is_ai:
+		return
+	_paper = AudioStreamPlayer3D.new()
+	_paper.name = "PaperFlutter"
+	_paper.stream = PAPER_STREAM
+	_paper.bus = "SFX"
+	_paper.volume_db = 2.0
+	_paper.max_db = 2.0
+	_paper.unit_size = 26.0
+	_paper.max_distance = 0.0
+	_paper.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+	_paper.attenuation_filter_cutoff_hz = 7200.0
+	_paper.attenuation_filter_db = -10.0
+	_paper.doppler_tracking = AudioStreamPlayer3D.DOPPLER_TRACKING_DISABLED
+	_paper.panning_strength = 0.7
+	add_child(_paper)
+	_paper.finished.connect(_on_paper_finished)
+
+
+func _play_paper() -> void:
+	if is_ai or _paper == null:
+		return
+	_paper.volume_db = 2.0
+	_paper.pitch_scale = randf_range(0.97, 1.04)
+	_paper.play()
+
+
+func _update_wheel_audio() -> void:
+	## A kite thrashing low in the roof air goes "phad-phad" — quieter and
+	## busier than the full crack of a kheench.
+	if is_ai or _paper == null or _kheench:
+		return
+	if _wheel > 0.45 and not _paper.playing:
+		_paper.play()
+	if _paper.playing:
+		_paper.volume_db = lerpf(-24.0, -6.0, clampf(_wheel, 0.0, 1.0))
+		_paper.pitch_scale = lerpf(0.9, 1.16, _wheel)
+		if _wheel < 0.12:
+			_paper.stop()
+
+
+func _stop_paper() -> void:
+	if _paper and _paper.playing:
+		_paper.stop()
+
+
+func _on_paper_finished() -> void:
+	if is_ai or _paper == null:
+		return
+	if _kheench or _wheel > 0.45:
+		_paper.play()
 
 
 func _build_visual() -> void:
@@ -857,6 +1204,7 @@ func _build_visual() -> void:
 	_build_tail()
 	_build_line()
 	_build_speed_fx()
+	_build_paper_audio()
 	_reset_tail()
 
 
@@ -873,8 +1221,20 @@ func set_sail(id: String) -> void:
 	_sail_mat = null
 	_outline_mi = null
 	_outline_mat = null
-	if not _attach_glb_sail():
-		_build_diamond_sail(_rim_accent())
+	_outline_smat = null
+	_flex_on = false
+	_flex_mats.clear()
+	var painted := not _attach_glb_sail()
+	if painted:
+		var accent := _rim_accent()
+		_build_diamond_sail(accent)
+		if _nose_marker == null:
+			_add_nose_marker(accent)
+		elif _nose_mat:
+			_nose_mat.albedo_color = accent
+			_nose_mat.emission = accent
+	if _nose_marker:
+		_nose_marker.visible = painted
 	_rebuild_tail_mesh()
 
 
@@ -942,8 +1302,12 @@ func _world_aabb(n: Node) -> AABB:
 
 
 func _build_diamond_sail(accent: Color) -> void:
+	## Every paper kite flexes on its frame; the sculpted GLB sails do not.
+	_flex_on = KiteSkins.is_patang(sail_id)
+	_flex_mats.clear()
+	_outline_smat = null
 	var sail := MeshInstance3D.new()
-	sail.mesh = _make_diamond()
+	sail.mesh = _make_diamond_fine() if _flex_on else _make_diamond()
 	sail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	sail.extra_cull_margin = 12.0
 	_sail_mat = ShaderMaterial.new()
@@ -951,9 +1315,20 @@ func _build_diamond_sail(accent: Color) -> void:
 	_sail_mat.set_shader_parameter("lift", 0.0)
 	_sail_mat.set_shader_parameter("rim", 0.0)
 	_sail_mat.set_shader_parameter("rim_color", accent)
+	var pat := KiteSkins.pattern_for(sail_id)
+	_sail_mat.set_shader_parameter("pattern", pat)
+	_sail_mat.set_shader_parameter("kaman_arch", _arch_flag())
+	if pat > 0:
+		var pal := KiteSkins.palette_for(sail_id)
+		for i in 4:
+			_sail_mat.set_shader_parameter("col%d" % i, pal[i])
 	sail.material_override = _sail_mat
 	sail.sorting_offset = 0.05
 	_body.add_child(sail)
+	if _flex_on:
+		_flex_mats.append(_sail_mat)
+		_build_flex_frame(accent)
+		return
 	_outline_mi = MeshInstance3D.new()
 	_outline_mi.mesh = _make_outline_diamond()
 	_outline_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -972,14 +1347,135 @@ func _build_diamond_sail(accent: Color) -> void:
 	_outline_mi.position = Vector3(0.0, 0.02, 0.0)
 	_body.add_child(_outline_mi)
 	_add_spar(Vector3(0.0, 0.0, 0.0), Vector3(0.0, 0.0, 1.0), KITE_SPAN, 0.016)
-	_add_spar(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.0, 0.0), 1.15, 0.014)
+	if KiteSkins.has_kaman_arch(sail_id):
+		var bow := MeshInstance3D.new()
+		bow.mesh = _make_bow_mesh(0.014)
+		var wood := StandardMaterial3D.new()
+		wood.albedo_color = Color(0.42, 0.28, 0.14)
+		wood.roughness = 0.8
+		wood.cull_mode = BaseMaterial3D.CULL_DISABLED
+		bow.material_override = wood
+		_body.add_child(bow)
+	else:
+		_add_spar(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.0, 0.0), 1.15, 0.014)
+
+
+## Rim + bamboo frame that bend with the paper (shared flex shader include).
+func _build_flex_frame(accent: Color) -> void:
+	_outline_mat = null
+	_outline_mi = MeshInstance3D.new()
+	_outline_mi.mesh = _make_ring_fine(16)
+	_outline_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_outline_mi.extra_cull_margin = 12.0
+	_outline_smat = ShaderMaterial.new()
+	_outline_smat.shader = RIM_SHADER
+	_outline_smat.set_shader_parameter("rim_col", accent)
+	_outline_smat.set_shader_parameter("kaman_arch", _arch_flag())
+	_outline_mi.material_override = _outline_smat
+	_outline_mi.position = Vector3(0.0, 0.02, 0.0)
+	_body.add_child(_outline_mi)
+	_flex_mats.append(_outline_smat)
+	_add_flex_spars()
+
+
+func _add_flex_spars() -> void:
+	var spar_mat := ShaderMaterial.new()
+	spar_mat.shader = SPAR_SHADER
+	spar_mat.set_shader_parameter("kaman_arch", _arch_flag())
+	_flex_mats.append(spar_mat)
+	var half := KITE_SPAN * 0.5
+	var spine: ArrayMesh
+	if KiteSkins.has_kaman_arch(sail_id):
+		## Frame on the flyer's side of the paper, as on a real patang.
+		var pts := PackedVector3Array()
+		for i in 25:
+			var z := lerpf(-half, half, float(i) / 24.0)
+			pts.append(Vector3(0.0, _paper_y(0.0, z) + 0.021, z))
+		spine = _make_tube_path(pts, 0.016)
+	else:
+		spine = _make_tube(Vector3(0.0, 0.0, -half), Vector3(0.0, 0.0, half), 0.016, 24)
+	var bow := _make_bow_mesh(0.014)
+	for mesh in [spine, bow]:
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.material_override = spar_mat
+		mi.extra_cull_margin = 12.0
+		_body.add_child(mi)
+
+
+func _arch_flag() -> float:
+	return 1.0 if KiteSkins.has_kaman_arch(sail_id) else 0.0
+
+
+func _kaman_z(x: float) -> float:
+	var t := clampf(x / 0.58, -1.0, 1.0)
+	return 0.02 + (KAMAN_PEAK - 0.02) * (1.0 - t * t)
+
+
+## The bow: an arch bowed toward the nose, or the old straight cross stick.
+func _make_bow_mesh(r: float) -> ArrayMesh:
+	var pts := PackedVector3Array()
+	var n := 24
+	var arch := KiteSkins.has_kaman_arch(sail_id)
+	for i in n + 1:
+		var x := lerpf(-0.575, 0.575, float(i) / float(n))
+		if arch:
+			## Riding the flyer's face of the paper.
+			var z := _kaman_z(x)
+			pts.append(Vector3(x, _paper_y(x, z) + r + 0.005, z))
+		else:
+			pts.append(Vector3(x, 0.0, 0.0))
+	return _make_tube_path(pts, r)
+
+
+## Height of the paper surface (the sail rises to a shallow peak at the centre).
+func _paper_y(x: float, z: float) -> float:
+	var qx := absf(x / 0.58)
+	var dz := z - 0.02
+	var qy := absf(dz / (0.76 if dz > 0.0 else 0.64))
+	return 0.08 * maxf(0.0, 1.0 - qx - qy)
+
+
+func _update_flex(delta: float) -> void:
+	if not _flex_on or _flex_mats.is_empty():
+		return
+	## How taut the line holds the paper in each phase.
+	var target := 0.15
+	match phase:
+		Phase.FLY:
+			target = 1.0
+		Phase.CLIMB:
+			target = 0.55
+		Phase.SPIN:
+			target = 0.42 - 0.3 * slack
+		Phase.DHEEL:
+			target = 0.05
+	## Underdamped spring: a yank snaps, overshoots, settles.
+	var dt := minf(delta, 1.0 / 30.0)
+	_tug_v += (FLEX_STIFF * (target - _tug) - FLEX_DAMP * _tug_v) * dt
+	_tug += _tug_v * dt
+	var bow := clampf(0.3 + 0.8 * _tug, 0.0, 1.6)
+	var billow := clampf(0.25 + 0.9 * _tug, 0.0, 1.7)
+	var flutter := 0.2 + clampf(absf(_tug_v) * 0.06, 0.0, 0.5)
+	match phase:
+		Phase.FLY:
+			flutter += 0.25 + clampf(velocity.length() / 40.0, 0.0, 0.4)
+		Phase.SPIN:
+			flutter += _wheel * 0.7 + slack * 0.2
+		Phase.DHEEL:
+			flutter += 0.5 + slack * 0.5
+	flutter = clampf(flutter, 0.0, 1.4)
+	for m in _flex_mats:
+		m.set_shader_parameter("flex_bow", bow)
+		m.set_shader_parameter("flex_billow", billow)
+		m.set_shader_parameter("flex_flutter", flutter)
 
 
 func _add_nose_marker(accent: Color) -> void:
 	_nose_marker = MeshInstance3D.new()
 	var cone := CylinderMesh.new()
 	cone.top_radius = 0.002
-	cone.bottom_radius = 0.05
+	cone.bottom_radius = 0.038
 	cone.height = NOSE_MESH_H
 	cone.radial_segments = 8
 	_nose_marker.mesh = cone
@@ -1094,7 +1590,8 @@ func _rebuild_trail_mesh() -> void:
 	var n := _trail_pts.size()
 	if n < 2:
 		return
-	var dist := viewer_pos.distance_to(global_position)
+	var eye := _eye_pos()
+	var dist := eye.distance_to(global_position)
 	var core_w := clampf(dist * 0.00035, 0.018, 0.055)
 	var glow_w := core_w * 3.2
 	_add_trail_strip(glow_w, Color(1.0, 0.55, 0.12, 0.22), 0.55)
@@ -1102,6 +1599,7 @@ func _rebuild_trail_mesh() -> void:
 
 
 func _add_trail_strip(half_w: float, tint: Color, alpha_mul: float) -> void:
+	_eye = _eye_pos()
 	var n := _trail_pts.size()
 	_trail_imm.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP, _trail_mat)
 	for idx in n:
@@ -1114,7 +1612,7 @@ func _add_trail_strip(half_w: float, tint: Color, alpha_mul: float) -> void:
 		if along.length_squared() < 0.00001:
 			along = velocity if velocity.length_squared() > 0.00001 else Vector3(0.0, 0.0, -1.0)
 		along = along.normalized()
-		var to_cam := viewer_pos - p
+		var to_cam := _eye - p
 		var side := along.cross(to_cam)
 		if side.length_squared() < 0.05:
 			side = along.cross(Vector3.UP)
@@ -1148,6 +1646,9 @@ func _make_diamond() -> ArrayMesh:
 	var left := Vector3(-0.58, 0.0, 0.02)
 	var bow := Vector3(0.0, 0.08, 0.04)
 	var c := _sail_colors
+	if KiteSkins.is_patang(sail_id):
+		## The shader paints the design; vertex colour only darkens the back.
+		c = [Color.WHITE, Color.WHITE, Color.WHITE, Color.WHITE]
 	var panels: Array = [
 		[bow, nose, right, c[0]],
 		[bow, right, tail, c[1]],
@@ -1163,20 +1664,131 @@ func _make_diamond() -> ArrayMesh:
 	return st.commit()
 
 
+## Same sail as _make_diamond, finely gridded so the paper can bend.
+func _make_diamond_fine() -> ArrayMesh:
+	var bow := Vector3(0.0, 0.08, 0.04)
+	var tips: Array[Vector3] = [
+		Vector3(0.0, 0.0, 0.78),
+		Vector3(0.58, 0.0, 0.02),
+		Vector3(0.0, 0.0, -0.62),
+		Vector3(-0.58, 0.0, 0.02),
+	]
+	var n := FLEX_GRID
+	var front := Color.WHITE
+	var back := Color.WHITE.darkened(0.08)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for q in 4:
+		var a: Vector3 = tips[q]
+		var b: Vector3 = tips[(q + 1) % 4]
+		for i in n:
+			for j in n - i:
+				var p00 := _bary(bow, a, b, i, j, n)
+				var p10 := _bary(bow, a, b, i + 1, j, n)
+				var p01 := _bary(bow, a, b, i, j + 1, n)
+				_add_tri(st, p00, p10, p01, front)
+				_add_tri(st, p00, p01, p10, back)
+				if i + j + 2 <= n:
+					var p11 := _bary(bow, a, b, i + 1, j + 1, n)
+					_add_tri(st, p10, p11, p01, front)
+					_add_tri(st, p10, p01, p11, back)
+	## The shader derives the true face normal itself.
+	st.generate_normals()
+	return st.commit()
+
+
+func _bary(o: Vector3, a: Vector3, b: Vector3, i: int, j: int, n: int) -> Vector3:
+	return o + (a - o) * (float(i) / float(n)) + (b - o) * (float(j) / float(n))
+
+
+func _make_ring_fine(segs: int) -> ArrayMesh:
+	var tips: Array[Vector3] = [
+		Vector3(0.0, 0.0, 0.78),
+		Vector3(0.58, 0.0, 0.02),
+		Vector3(0.0, 0.0, -0.62),
+		Vector3(-0.58, 0.0, 0.02),
+	]
+	var center := Vector3(0.0, 0.0, 0.08)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for e in 4:
+		var a := tips[e]
+		var b := tips[(e + 1) % 4]
+		var ai := center + (a - center) * 0.985
+		var bi := center + (b - center) * 0.985
+		var ao := center + (a - center) * 1.10
+		var bo := center + (b - center) * 1.10
+		for s in segs:
+			var t0 := float(s) / float(segs)
+			var t1 := float(s + 1) / float(segs)
+			var i0 := ai.lerp(bi, t0)
+			var i1 := ai.lerp(bi, t1)
+			var o0 := ao.lerp(bo, t0)
+			var o1 := ao.lerp(bo, t1)
+			_add_tri(st, i0, o0, o1, Color.WHITE)
+			_add_tri(st, i0, o1, i1, Color.WHITE)
+	st.generate_normals()
+	return st.commit()
+
+
+## A straight bamboo stick from a to b, in the sail's own space, segmented so it bends.
+func _make_tube(a: Vector3, b: Vector3, r: float, segs: int) -> ArrayMesh:
+	var pts := PackedVector3Array()
+	for s in segs + 1:
+		pts.append(a.lerp(b, float(s) / float(segs)))
+	return _make_tube_path(pts, r)
+
+
+## A bamboo stick along any path (the arched bow), six-sided, following its curve.
+func _make_tube_path(pts: PackedVector3Array, r: float) -> ArrayMesh:
+	var sides := 6
+	var rings: Array = []
+	for i in pts.size():
+		var tangent := (pts[mini(i + 1, pts.size() - 1)] - pts[maxi(i - 1, 0)]).normalized()
+		var u := tangent.cross(Vector3.UP)
+		if u.length_squared() < 0.01:
+			u = tangent.cross(Vector3.RIGHT)
+		u = u.normalized()
+		var v := tangent.cross(u).normalized()
+		var ring: Array[Vector3] = []
+		for k in sides:
+			ring.append(u * cos(TAU * k / sides) + v * sin(TAU * k / sides))
+		rings.append(ring)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in pts.size() - 1:
+		var r0: Array[Vector3] = rings[i]
+		var r1: Array[Vector3] = rings[i + 1]
+		for k in sides:
+			var k1 := (k + 1) % sides
+			for pv in [[pts[i], r0[k]], [pts[i + 1], r1[k]], [pts[i + 1], r1[k1]], [pts[i], r0[k]], [pts[i + 1], r1[k1]], [pts[i], r0[k1]]]:
+				st.set_normal(pv[1])
+				st.add_vertex(pv[0] + pv[1] * r)
+	return st.commit()
+
+
 func _make_outline_diamond() -> ArrayMesh:
-	var grow := 1.1
-	var nose := Vector3(0.0, 0.0, 0.78) * grow
-	var right := Vector3(0.58, 0.0, 0.02) * grow
-	var tail := Vector3(0.0, 0.0, -0.62) * grow
-	var left := Vector3(-0.58, 0.0, 0.02) * grow
-	var bow := Vector3(0.0, 0.09, 0.04) * grow
+	## A glowing rim just outside the sail — it keeps a far kite readable
+	## without laying a tinted film over the paper's design.
+	var tips: Array[Vector3] = [
+		Vector3(0.0, 0.0, 0.78),
+		Vector3(0.58, 0.0, 0.02),
+		Vector3(0.0, 0.0, -0.62),
+		Vector3(-0.58, 0.0, 0.02),
+	]
+	var center := Vector3(0.0, 0.0, 0.08)
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var col := Color.WHITE
-	_add_tri(st, bow, nose, right, col)
-	_add_tri(st, bow, right, tail, col)
-	_add_tri(st, bow, tail, left, col)
-	_add_tri(st, bow, left, nose, col)
+	for i in 4:
+		var a := tips[i]
+		var b := tips[(i + 1) % 4]
+		var ai := center + (a - center) * 0.985
+		var bi := center + (b - center) * 0.985
+		var ao := center + (a - center) * 1.10
+		var bo := center + (b - center) * 1.10
+		_add_tri(st, ai, ao, bo, col)
+		_add_tri(st, ai, bo, bi, col)
 	st.generate_normals()
 	return st.commit()
 
@@ -1342,7 +1954,13 @@ func _bezier(p0: Vector3, p1: Vector3, p2: Vector3, t: float) -> Vector3:
 	return u * u * p0 + 2.0 * u * t * p1 + t * t * p2
 
 
-func _place_segment(mi: MeshInstance3D, cyl: CylinderMesh, p0: Vector3, p1: Vector3, radius: float) -> void:
+## Thread radius for a point this far from the eye: about a pixel wide at
+## any distance, a touch finer toward the kite.
+func _thread_radius(d: float, t: float) -> float:
+	return clampf(d * lerpf(0.00019, 0.000145, t), 0.0005, lerpf(0.009, 0.007, t))
+
+
+func _place_segment(mi: MeshInstance3D, cyl: CylinderMesh, p0: Vector3, p1: Vector3, radius: float, radius_end: float = -1.0) -> void:
 	var delta := p1 - p0
 	var length := delta.length()
 	if length < 0.001:
@@ -1350,8 +1968,9 @@ func _place_segment(mi: MeshInstance3D, cyl: CylinderMesh, p0: Vector3, p1: Vect
 		return
 	mi.visible = true
 	cyl.height = length
-	cyl.top_radius = radius
+	## Bottom of the cylinder sits at p0, top at p1.
 	cyl.bottom_radius = radius
+	cyl.top_radius = radius if radius_end < 0.0 else radius_end
 	var up := delta / length
 	var x_axis := up.cross(Vector3.RIGHT)
 	if x_axis.length_squared() < 0.001:

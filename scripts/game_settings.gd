@@ -9,6 +9,10 @@ var quality: int = 1
 var fullscreen: bool = false
 var show_hints: bool = true
 var kite_id: String = "saffron"
+var mute: bool = false
+var vol_master: float = 0.85
+var vol_ambience: float = 0.80
+var vol_sfx: float = 0.90
 
 
 func load_from_disk() -> void:
@@ -19,6 +23,10 @@ func load_from_disk() -> void:
 	fullscreen = bool(cfg.get_value("video", "fullscreen", false))
 	show_hints = bool(cfg.get_value("ui", "hints", true))
 	kite_id = KiteSkins.clamp_id(str(cfg.get_value("play", "kite", "saffron")))
+	mute = bool(cfg.get_value("audio", "mute", false))
+	vol_master = clampf(float(cfg.get_value("audio", "master", 0.85)), 0.0, 1.0)
+	vol_ambience = clampf(float(cfg.get_value("audio", "ambience", 0.80)), 0.0, 1.0)
+	vol_sfx = clampf(float(cfg.get_value("audio", "sfx", 0.90)), 0.0, 1.0)
 
 
 func save_to_disk() -> void:
@@ -27,10 +35,23 @@ func save_to_disk() -> void:
 	cfg.set_value("video", "fullscreen", fullscreen)
 	cfg.set_value("ui", "hints", show_hints)
 	cfg.set_value("play", "kite", kite_id)
+	cfg.set_value("audio", "mute", mute)
+	cfg.set_value("audio", "master", vol_master)
+	cfg.set_value("audio", "ambience", vol_ambience)
+	cfg.set_value("audio", "sfx", vol_sfx)
 	cfg.save(PATH)
 
 
 func apply(main: Node) -> void:
+	_ensure_buses()
+	AudioServer.set_bus_mute(0, mute)
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(vol_master, 0.001)))
+	var amb := AudioServer.get_bus_index("Ambience")
+	var sfx := AudioServer.get_bus_index("SFX")
+	if amb >= 0:
+		AudioServer.set_bus_volume_db(amb, linear_to_db(maxf(vol_ambience, 0.001)))
+	if sfx >= 0:
+		AudioServer.set_bus_volume_db(sfx, linear_to_db(maxf(vol_sfx, 0.001)))
 	if fullscreen:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	else:
@@ -80,3 +101,17 @@ func apply(main: Node) -> void:
 			if sun:
 				sun.directional_shadow_max_distance = 180.0
 				sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+
+
+func _ensure_buses() -> void:
+	_ensure_bus("Ambience")
+	_ensure_bus("SFX")
+
+
+func _ensure_bus(bus_name: String) -> void:
+	if AudioServer.get_bus_index(bus_name) >= 0:
+		return
+	AudioServer.add_bus()
+	var idx := AudioServer.bus_count - 1
+	AudioServer.set_bus_name(idx, bus_name)
+	AudioServer.set_bus_send(idx, "Master")

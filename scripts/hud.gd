@@ -3,6 +3,10 @@ extends CanvasLayer
 const WindSys := preload("res://scripts/wind_system.gd")
 const KiteSc := preload("res://scripts/kite.gd")
 const PechSc := preload("res://scripts/pech.gd")
+const EmblemSc := preload("res://scripts/menu_emblem.gd")
+const PortraitSc := preload("res://scripts/flyer_portrait.gd")
+const BODY_BOY := preload("res://assets/people/stylized+boy+3d+model (1).glb")
+const BODY_GIRL := preload("res://assets/people/stylized+female+3d+newmodel.glb")
 const SettingsSc := preload("res://scripts/game_settings.gd")
 const PauseSc := preload("res://scripts/pause_menu.gd")
 const KiteSkins := preload("res://scripts/kite_skins.gd")
@@ -16,6 +20,7 @@ signal character_chosen(id: String)
 signal mode_chosen(id: String)
 signal online_host
 signal online_join(code: String)
+signal title_requested
 
 var wind: WindSys
 var kite: KiteSc
@@ -30,6 +35,13 @@ var game_mode: String = ""
 
 var _kaata: Label
 var _gust_flash: float = 0.0
+var _wind_card: Panel
+var _wind_dial: Control
+var _wind_speed: Label
+var _wind_chip: Label
+var _gust_tip: Label
+var _gust_tip_t: float = 0.0
+var _gusts_seen: int = 0
 var _kaata_t: float = 0.0
 var _kaata_delay: float = -1.0
 var _kaata_won: bool = true
@@ -38,6 +50,17 @@ var _line_now: Label
 var _line_max: Label
 var _line_fill: ColorRect
 var _line_track_w: float = 236.0
+var _manjha_box: Control
+var _manjha_fill: ColorRect
+var _theirs_fill: ColorRect
+var _line_card: Panel
+var _pech_call: Label
+var _pech_call_t: float = 0.0
+var _pech_call_cool: float = 0.0
+var _shake_t: float = 0.0
+const MANJHA_YOU := Color(1.0, 0.82, 0.36)
+const MANJHA_THEM := Color(1.0, 0.42, 0.52)
+const MANJHA_HURT := Color(1.0, 0.16, 0.12)
 var _menu: PauseSc
 var _gear: Button
 var zoom: float = 0.0
@@ -45,6 +68,11 @@ var _intro: Control
 var _intro_prompt: Label
 var _intro_t: float = 0.0
 var _intro_on: bool = false
+var _cine: Control
+var _cine_top: ColorRect
+var _cine_bot: ColorRect
+var _cine_cap: Label
+var _cine_skip: Label
 var _kite_row: HBoxContainer
 var _kite_cards: Array[Button] = []
 var _char_row: HBoxContainer
@@ -71,9 +99,11 @@ func setup(wind_in: WindSys, kite_in: KiteSc, rival_in: KiteSc = null, pech_in: 
 	_build()
 	if wind:
 		wind.gust_began.connect(func() -> void: _gust_flash = 1.0)
+		wind.gust_warning.connect(_on_gust_warning)
 	if pech:
 		pech.kaata.connect(_on_kaata)
 		pech.pech_changed.connect(_on_pech)
+		pech.lock_changed.connect(_on_pech_lock)
 
 
 func _build() -> void:
@@ -91,6 +121,7 @@ func _build() -> void:
 	var hud := _hud_chrome
 
 	_build_line_card(hud)
+	_build_wind_card(hud)
 	_build_zoom_bar(hud)
 	_kaata = _make_label(hud, Vector2(0, 0), 72)
 	_kaata.set_anchors_preset(Control.PRESET_CENTER)
@@ -104,12 +135,26 @@ func _build() -> void:
 	_kaata.add_theme_color_override("font_shadow_color", Color(0.4, 0.05, 0.0, 0.8))
 	_kaata.add_theme_constant_override("shadow_offset_x", 3)
 	_kaata.add_theme_constant_override("shadow_offset_y", 3)
+	_pech_call = _make_label(hud, Vector2(0, 0), 64)
+	_pech_call.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_pech_call.offset_left = -220.0
+	_pech_call.offset_right = 220.0
+	_pech_call.offset_top = 96.0
+	_pech_call.offset_bottom = 176.0
+	_pech_call.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_pech_call.text = "PECH!"
+	_pech_call.pivot_offset = Vector2(220.0, 40.0)
+	_pech_call.modulate = Color(1.0, 0.72, 0.26, 0.0)
+	_pech_call.add_theme_color_override("font_shadow_color", Color(0.35, 0.04, 0.0, 0.85))
+	_pech_call.add_theme_constant_override("shadow_offset_x", 3)
+	_pech_call.add_theme_constant_override("shadow_offset_y", 3)
 	_build_menu_button(root)
 	_title_card = TitleCardSc.new()
 	root.add_child(_title_card)
 	_build_intro(root)
 	_build_vs(root)
 	_build_payout(root)
+	_build_letterbox(root)
 	_menu = PauseSc.new()
 	add_child(_menu)
 	_menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -118,6 +163,7 @@ func _build() -> void:
 	_menu.quit_requested.connect(func() -> void: get_tree().quit())
 	_menu.settings_changed.connect(_apply_settings)
 	_menu.kite_chosen.connect(_pick_kite)
+	_menu.title_requested.connect(func() -> void: title_requested.emit())
 	_apply_settings()
 
 
@@ -125,7 +171,8 @@ func _build_line_card(parent: Control) -> void:
 	var card := Panel.new()
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.position = Vector2(22, 20)
-	card.size = Vector2(268, 96)
+	card.size = Vector2(268, 128)
+	_line_card = card
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.05, 0.04, 0.06, 0.58)
 	sb.border_color = Color(1.0, 0.84, 0.38, 0.42)
@@ -173,14 +220,51 @@ func _build_line_card(parent: Control) -> void:
 
 	var track := ColorRect.new()
 	track.color = Color(1.0, 0.84, 0.38, 0.14)
-	track.position = Vector2(18, 76)
+	track.position = Vector2(18, 72)
 	track.size = Vector2(_line_track_w, 7)
 	card.add_child(track)
 	_line_fill = ColorRect.new()
 	_line_fill.color = Color(1.0, 0.78, 0.32, 0.95)
-	_line_fill.position = Vector2(18, 76)
+	_line_fill.position = Vector2(18, 72)
 	_line_fill.size = Vector2(40, 7)
 	card.add_child(_line_fill)
+
+	_manjha_box = Control.new()
+	_manjha_box.position = Vector2(0, 84)
+	_manjha_box.size = Vector2(268, 40)
+	_manjha_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_manjha_box.visible = false
+	card.add_child(_manjha_box)
+	_manjha_fill = _add_manjha_row(_manjha_box, 0, "YOU", MANJHA_YOU)
+	_theirs_fill = _add_manjha_row(_manjha_box, 20, "THEM", MANJHA_THEM)
+
+
+## Each row sits in its own box so it can shake when that string is losing.
+func _add_manjha_row(parent: Control, y: float, caption: String, col: Color, thick: float = 6.0) -> ColorRect:
+	var row := Control.new()
+	row.position = Vector2(0, y)
+	row.size = Vector2(268, 18)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(row)
+	var cap := Label.new()
+	cap.text = caption
+	cap.position = Vector2(18, -2)
+	cap.size = Vector2(52, 16)
+	cap.add_theme_font_override("font", Brand.body_font())
+	cap.add_theme_font_size_override("font_size", 11)
+	cap.add_theme_color_override("font_color", col)
+	row.add_child(cap)
+	var track := ColorRect.new()
+	track.color = Color(col.r, col.g, col.b, 0.16)
+	track.position = Vector2(70, 3)
+	track.size = Vector2(180, thick)
+	row.add_child(track)
+	var fill := ColorRect.new()
+	fill.color = col
+	fill.position = Vector2(70, 3)
+	fill.size = Vector2(180, thick)
+	row.add_child(fill)
+	return fill
 
 
 func _build_zoom_bar(root: Control) -> void:
@@ -192,9 +276,9 @@ func _build_zoom_bar(root: Control) -> void:
 	track.anchor_top = 0.0
 	track.anchor_bottom = 0.0
 	track.offset_left = 16.0
-	track.offset_top = 140.0
+	track.offset_top = 172.0
 	track.offset_right = 50.0
-	track.offset_bottom = 430.0
+	track.offset_bottom = 450.0
 	root.add_child(track)
 
 	_zoom = VSlider.new()
@@ -209,26 +293,26 @@ func _build_zoom_bar(root: Control) -> void:
 	_zoom.anchor_top = 0.0
 	_zoom.anchor_bottom = 0.0
 	_zoom.offset_left = 20.0
-	_zoom.offset_top = 158.0
+	_zoom.offset_top = 190.0
 	_zoom.offset_right = 46.0
-	_zoom.offset_bottom = 400.0
+	_zoom.offset_bottom = 420.0
 	_zoom.value_changed.connect(_on_zoom)
 	_style_zoom(_zoom)
 	root.add_child(_zoom)
 
-	var plus := _make_label(root, Vector2(16, 140), 14)
+	var plus := _make_label(root, Vector2(16, 172), 14)
 	plus.text = "+"
 	plus.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	plus.size = Vector2(34, 18)
 	plus.modulate = Color(1.0, 0.84, 0.38, 0.9)
 
-	var minus := _make_label(root, Vector2(16, 404), 16)
+	var minus := _make_label(root, Vector2(16, 424), 16)
 	minus.text = "–"
 	minus.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	minus.size = Vector2(34, 18)
 	minus.modulate = Color(1.0, 0.84, 0.38, 0.9)
 
-	var cap := _make_label(root, Vector2(6, 422), 11)
+	var cap := _make_label(root, Vector2(6, 442), 11)
 	cap.text = "ZOOM"
 	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cap.size = Vector2(54, 16)
@@ -393,25 +477,27 @@ func _build_intro(root: Control) -> void:
 	var box := VBoxContainer.new()
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_theme_constant_override("separation", 8)
+	box.clip_contents = false
+	box.add_theme_constant_override("separation", 12)
 	box.set_anchors_preset(Control.PRESET_CENTER)
 	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	box.grow_vertical = Control.GROW_DIRECTION_BOTH
 	box.offset_left = -520.0
 	box.offset_right = 520.0
-	## Sit the block in the lower third so the sky and the kite read above it.
-	box.offset_top = 10.0
-	box.offset_bottom = 420.0
+	box.offset_top = -420.0
+	box.offset_bottom = 430.0
 	_intro.add_child(box)
 
 	var mark := TitleMarkSc.new()
 	mark.mark_scale = 1.0
 	mark.show_tag = true
 	mark.lively = true
+	mark.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	box.add_child(mark)
 
 	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, 12)
+	spacer.custom_minimum_size = Vector2(0, 28)
 	box.add_child(spacer)
 
 	var pick := Label.new()
@@ -465,7 +551,7 @@ func _build_intro(root: Control) -> void:
 	_mode_row.add_child(_make_mode_card(
 		"battle",
 		"Classic Kite Battle",
-		"Cut their manjha. First to 2 kaata. No rockets.",
+		"Dart (Q) so your string swipes through theirs — the faster kite cuts. E ducks. First to 2.",
 		[Color(0.38, 0.62, 0.95), Color(0.95, 0.82, 0.28), Color(0.92, 0.28, 0.48)]
 	))
 	_mode_row.add_child(_make_mode_card(
@@ -566,7 +652,7 @@ func _build_payout(root: Control) -> void:
 	_payout.offset_left = -280.0
 	_payout.offset_right = 280.0
 	_payout.offset_top = 28.0
-	_payout.offset_bottom = 80.0
+	_payout.offset_bottom = 118.0
 	_payout.add_theme_font_override("font", Brand.display_font())
 	_payout.add_theme_font_size_override("font_size", 28)
 	_payout.add_theme_color_override("font_color", Brand.GOLD)
@@ -574,6 +660,7 @@ func _build_payout(root: Control) -> void:
 	_payout.add_theme_constant_override("outline_size", 6)
 	_payout.modulate.a = 0.0
 	_payout.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_payout.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(_payout)
 
 
@@ -608,18 +695,26 @@ func show_payout(result: Dictionary) -> void:
 	var line := "+%d XP   ·   +%d coins   ·   %s" % [int(result.get("xp", 0)), int(result.get("coins", 0)), str(result.get("rank", ""))]
 	if bool(result.get("ranked_up", false)):
 		line += "  ↑"
+	var kind := str(result.get("kind", ""))
+	if kind == "battle":
+		var cuts := int(result.get("cuts", 0))
+		var won := bool(result.get("won", false))
+		line += "\nfinish + %d cut%s%s" % [cuts, "" if cuts == 1 else "s", "  ·  win" if won else ""]
+	elif kind == "save":
+		line += "\n%d rocket dodge%s" % [int(result.get("dodges", 0)), "" if int(result.get("dodges", 0)) == 1 else "s"]
 	_payout.text = line
 	_payout.modulate.a = 1.0
 	if _menu:
 		_menu.refresh_profile()
 	var tw := create_tween()
-	tw.tween_interval(2.8)
+	tw.tween_interval(3.2)
 	tw.tween_property(_payout, "modulate:a", 0.0, 0.6)
 
 
 func show_character_select() -> void:
 	if _intro == null:
 		return
+	set_letterbox(false)
 	if _title_card and _title_card.has_method("recede"):
 		_title_card.recede()
 	_intro_on = true
@@ -634,8 +729,91 @@ func show_character_select() -> void:
 		_mode_row.visible = false
 	if _mode_label:
 		_mode_label.visible = false
+	if _net_row:
+		_net_row.visible = false
 	if _intro_prompt:
 		_intro_prompt.visible = false
+	game_mode = ""
+
+
+func hide_chrome() -> void:
+	if _hud_chrome:
+		_hud_chrome.visible = false
+		_hud_chrome.modulate.a = 0.0
+	if _gear:
+		_gear.visible = false
+
+
+func reset_to_title() -> void:
+	hide_chrome()
+	hide_vs()
+	hide_net_lobby()
+	game_mode = ""
+	if _title_card and _title_card.has_method("replay"):
+		_title_card.replay()
+	if _intro:
+		_intro.visible = false
+		_intro_on = false
+		_intro.modulate.a = 0.0
+
+
+func set_letterbox(on: bool, caption: String = "", skip: String = "SPACE  skip") -> void:
+	if _cine == null:
+		return
+	_cine.visible = on
+	if _cine_cap:
+		_cine_cap.text = caption
+		_cine_cap.visible = caption != ""
+	if _cine_skip:
+		_cine_skip.text = skip
+		_cine_skip.visible = on and skip != ""
+	if not on:
+		return
+	_cine.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(_cine, "modulate:a", 1.0, 0.45)
+
+
+func _build_letterbox(root: Control) -> void:
+	_cine = Control.new()
+	_cine.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_cine.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cine.visible = false
+	root.add_child(_cine)
+	_cine_top = ColorRect.new()
+	_cine_top.color = Color(0.02, 0.02, 0.03, 0.92)
+	_cine_top.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_cine_top.offset_bottom = 72.0
+	_cine_top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cine.add_child(_cine_top)
+	_cine_bot = ColorRect.new()
+	_cine_bot.color = Color(0.02, 0.02, 0.03, 0.92)
+	_cine_bot.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_cine_bot.offset_top = -88.0
+	_cine_bot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cine.add_child(_cine_bot)
+	_cine_cap = Label.new()
+	_cine_cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_cine_cap.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_cine_cap.offset_top = -78.0
+	_cine_cap.offset_bottom = -36.0
+	_cine_cap.add_theme_font_override("font", Brand.display_font())
+	_cine_cap.add_theme_font_size_override("font_size", 22)
+	_cine_cap.add_theme_color_override("font_color", Brand.GOLD)
+	_cine_cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cine.add_child(_cine_cap)
+	_cine_skip = Label.new()
+	_cine_skip.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_cine_skip.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_cine_skip.offset_left = 0.0
+	_cine_skip.offset_top = 22.0
+	_cine_skip.offset_right = -28.0
+	_cine_skip.offset_bottom = 52.0
+	_cine_skip.add_theme_font_override("font", Brand.body_font())
+	_cine_skip.add_theme_font_size_override("font_size", 14)
+	_cine_skip.add_theme_color_override("font_color", Color(0.92, 0.86, 0.72, 0.7))
+	_cine_skip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cine.add_child(_cine_skip)
 
 
 func _show_chrome() -> void:
@@ -650,7 +828,7 @@ func _show_chrome() -> void:
 
 func _make_flyer_card(id: String, title: String, swatches: Array) -> Button:
 	var b := Button.new()
-	b.custom_minimum_size = Vector2(180, 148)
+	b.custom_minimum_size = Vector2(200, 214)
 	b.mouse_filter = Control.MOUSE_FILTER_STOP
 	b.focus_mode = Control.FOCUS_NONE
 	b.pressed.connect(func() -> void: _pick_character(id))
@@ -676,17 +854,12 @@ func _make_flyer_card(id: String, title: String, swatches: Array) -> Button:
 	col.add_theme_constant_override("separation", 8)
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
 	b.add_child(col)
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 6)
-	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	col.add_child(row)
-	for c in swatches:
-		var chip := ColorRect.new()
-		chip.custom_minimum_size = Vector2(28, 52)
-		chip.color = c
-		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_child(chip)
+	## The flyer themselves: a live bust of the rooftop model.
+	var portrait := PortraitSc.new()
+	portrait.custom_minimum_size = Vector2(172, 150)
+	portrait.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(portrait)
+	portrait.setup(BODY_GIRL if id == "girl" else BODY_BOY, swatches[0])
 	var name := Label.new()
 	name.text = title
 	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -704,7 +877,7 @@ func _make_mode_card(id: String, title: String, blurb: String, swatches: Array) 
 	wrap.add_theme_constant_override("separation", 8)
 	wrap.mouse_filter = Control.MOUSE_FILTER_STOP
 	var b := Button.new()
-	b.custom_minimum_size = Vector2(280, 132)
+	b.custom_minimum_size = Vector2(280, 142)
 	b.mouse_filter = Control.MOUSE_FILTER_STOP
 	b.focus_mode = Control.FOCUS_NONE
 	b.pressed.connect(func() -> void: _pick_mode(id))
@@ -730,17 +903,14 @@ func _make_mode_card(id: String, title: String, blurb: String, swatches: Array) 
 	col.add_theme_constant_override("separation", 8)
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
 	b.add_child(col)
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 6)
-	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	col.add_child(row)
-	for c in swatches:
-		var chip := ColorRect.new()
-		chip.custom_minimum_size = Vector2(22, 40)
-		chip.color = c
-		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_child(chip)
+	## A little animated scene of the mode, in the card's colours.
+	var emblem := EmblemSc.new()
+	emblem.kind = id
+	emblem.cols = swatches
+	emblem.custom_minimum_size = Vector2(236, 66)
+	col.add_child(emblem)
+	b.mouse_entered.connect(func() -> void: emblem.hot = true)
+	b.mouse_exited.connect(func() -> void: emblem.hot = false)
 	var name := Label.new()
 	name.text = title
 	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -859,6 +1029,7 @@ func hide_intro() -> void:
 	if _intro == null or not _intro_on:
 		return
 	_intro_on = false
+	set_letterbox(false)
 	var tw := create_tween()
 	tw.tween_property(_intro, "modulate:a", 0.0, 0.45)
 	tw.tween_callback(func() -> void: _intro.visible = false)
@@ -893,6 +1064,14 @@ func _on_pech(_on: bool) -> void:
 	pass
 
 
+func _on_pech_lock(on: bool) -> void:
+	## Call it once per fight, not every time the strings flicker apart.
+	if not on or _pech_call_cool > 0.0:
+		return
+	_pech_call_t = 1.1
+	_pech_call_cool = 2.5
+
+
 func _process(delta: float) -> void:
 	if _intro_on and _intro:
 		_intro.modulate.a = move_toward(_intro.modulate.a, 1.0, delta * 2.4)
@@ -900,6 +1079,7 @@ func _process(delta: float) -> void:
 		if _intro_prompt:
 			_intro_prompt.modulate.a = 0.55 + 0.45 * absf(sin(_intro_t * 3.0))
 	_gust_flash = move_toward(_gust_flash, 0.0, delta * 0.8)
+	_update_wind_card(delta)
 	if _kaata_delay > 0.0:
 		_kaata_delay -= delta
 		if _kaata_delay <= 0.0:
@@ -911,6 +1091,19 @@ func _process(delta: float) -> void:
 		var a := clampf(_kaata_t / 0.4, 0.0, 1.0) if _kaata_t < 0.4 else 1.0
 		_kaata.modulate.a = a
 		_kaata.scale = Vector2.ONE * (1.0 + (1.0 - a) * 0.08)
+	_pech_call_cool = maxf(0.0, _pech_call_cool - delta)
+	if pech and pech.touching:
+		_pech_call_cool = 2.5
+	if _pech_call_t > 0.0:
+		_pech_call_t -= delta
+		## Slam in big, settle, then fade.
+		var age := 1.1 - _pech_call_t
+		var pop := 1.0 + 0.55 * exp(-age * 14.0)
+		_pech_call.scale = Vector2.ONE * pop
+		_pech_call.modulate.a = clampf(_pech_call_t / 0.35, 0.0, 1.0)
+	elif _pech_call:
+		_pech_call.modulate.a = 0.0
+	_shake_t += delta
 	_update_line_card()
 
 
@@ -925,4 +1118,180 @@ func _update_line_card() -> void:
 	_line_max.text = "/  %d m" % int(round(total))
 	var t := clampf(shown / maxf(total, 1.0), 0.0, 1.0)
 	_line_fill.size.x = _line_track_w * t
-	_line_fill.color = Color(1.0, 0.78, 0.32, 0.95).lerp(Color(1.0, 0.48, 0.22, 0.95), t)
+	var fight := game_mode == "battle"
+	if _manjha_box:
+		_manjha_box.visible = fight
+	var p_hit := pech.player_hit if pech else 0.0
+	var r_hit := pech.rival_hit if pech else 0.0
+	if fight and _manjha_fill and kite:
+		_manjha_fill.size.x = 180.0 * clampf(kite.manjha, 0.0, 1.0)
+		_hurt_row(_manjha_fill, MANJHA_YOU, p_hit, r_hit)
+	if fight and _theirs_fill and rival:
+		_theirs_fill.size.x = 180.0 * clampf(rival.manjha, 0.0, 1.0)
+		_hurt_row(_theirs_fill, MANJHA_THEM, r_hit, p_hit)
+
+
+## The bar that just lost a swipe shakes and flashes red, harder for a big bite.
+func _hurt_row(fill: ColorRect, base: Color, hit: float, other_hit: float) -> void:
+	var row := fill.get_parent() as Control
+	var k := hit if hit > other_hit + 0.05 else 0.0
+	row.position.x = sin(_shake_t * 57.0) * 3.5 * k + sin(_shake_t * 31.0) * 1.5 * k
+	var flash := (0.5 + 0.5 * sin(_shake_t * 24.0)) * k
+	fill.color = base.lerp(MANJHA_HURT, flash)
+
+
+## Wind readout beside the LINE card: which way it blows (relative to where
+## you look), how hard, and a GUST chip that pulses as a front comes up
+## behind you and lights up when it lands.
+func _build_wind_card(parent: Control) -> void:
+	var card := Panel.new()
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.position = Vector2(300, 20)
+	card.size = Vector2(150, 128)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.04, 0.06, 0.58)
+	sb.border_color = Color(1.0, 0.84, 0.38, 0.42)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(14)
+	sb.shadow_color = Color(0, 0, 0, 0.38)
+	sb.shadow_size = 10
+	sb.shadow_offset = Vector2(0, 3)
+	card.add_theme_stylebox_override("panel", sb)
+	parent.add_child(card)
+	_wind_card = card
+
+	var cap := Label.new()
+	cap.text = "WIND"
+	cap.position = Vector2(16, 10)
+	cap.add_theme_font_override("font", Brand.body_font())
+	cap.add_theme_font_size_override("font_size", 12)
+	cap.add_theme_color_override("font_color", Brand.GOLD)
+	card.add_child(cap)
+
+	_wind_dial = Control.new()
+	_wind_dial.position = Vector2(14, 34)
+	_wind_dial.size = Vector2(122, 56)
+	_wind_dial.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wind_dial.draw.connect(_draw_wind_dial)
+	card.add_child(_wind_dial)
+
+	_wind_speed = Label.new()
+	_wind_speed.position = Vector2(66, 36)
+	_wind_speed.size = Vector2(80, 30)
+	_wind_speed.add_theme_font_override("font", Brand.display_font())
+	_wind_speed.add_theme_font_size_override("font_size", 22)
+	_wind_speed.add_theme_color_override("font_color", Brand.CREAM)
+	card.add_child(_wind_speed)
+	var unit := Label.new()
+	unit.text = "km/h"
+	unit.position = Vector2(68, 62)
+	unit.add_theme_font_override("font", Brand.body_font())
+	unit.add_theme_font_size_override("font_size", 11)
+	unit.add_theme_color_override("font_color", Color(1.0, 0.94, 0.82, 0.62))
+	card.add_child(unit)
+
+	_wind_chip = Label.new()
+	_wind_chip.text = "GUST"
+	_wind_chip.position = Vector2(92, 8)
+	_wind_chip.add_theme_font_override("font", Brand.body_font())
+	_wind_chip.add_theme_font_size_override("font_size", 12)
+	_wind_chip.add_theme_color_override("font_color", Color(1.0, 0.62, 0.22))
+	_wind_chip.modulate.a = 0.0
+	card.add_child(_wind_chip)
+
+	_gust_tip = _make_label(parent, Vector2(0, 0), 26)
+	_gust_tip.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_gust_tip.offset_left = -300.0
+	_gust_tip.offset_right = 300.0
+	_gust_tip.offset_top = 170.0
+	_gust_tip.offset_bottom = 210.0
+	_gust_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_gust_tip.text = "Gust coming — ride it through their string!"
+	_gust_tip.add_theme_color_override("font_color", Color(1.0, 0.86, 0.5))
+	_gust_tip.modulate.a = 0.0
+
+
+func _on_gust_warning(_lead: float) -> void:
+	_gusts_seen += 1
+	## Teach it on the first few gusts of a battle, then trust the player.
+	if game_mode == "battle" and _gusts_seen <= 3:
+		_gust_tip_t = 3.2
+
+
+func _update_wind_card(delta: float) -> void:
+	if _wind_card == null or wind == null:
+		return
+	var incoming: float = wind.gust_incoming
+	var g := _gust_here()
+	_wind_speed.text = "%d" % int(round(wind.last_speed * 3.6))
+	var t := Time.get_ticks_msec() * 0.001
+	if g > 0.15:
+		_wind_chip.text = "GUST!"
+		_wind_chip.modulate = Color(1.0, 0.92, 0.45, 1.0)
+		_wind_chip.scale = Vector2.ONE
+	elif incoming > 0.0:
+		_wind_chip.text = "GUST"
+		var pulse := 0.5 + 0.5 * sin(t * lerpf(6.0, 16.0, incoming))
+		_wind_chip.modulate = Color(1.0, 0.62, 0.22, lerpf(0.35, 1.0, pulse))
+	else:
+		_wind_chip.modulate.a = move_toward(_wind_chip.modulate.a, 0.0, delta * 2.0)
+	var sb := _wind_card.get_theme_stylebox("panel") as StyleBoxFlat
+	if sb:
+		var hot := maxf(g, incoming * 0.6 * (0.5 + 0.5 * sin(t * 12.0)))
+		sb.border_color = Color(1.0, 0.84, 0.38, 0.42).lerp(Color(1.0, 0.7, 0.25, 1.0), hot)
+		sb.set_border_width_all(1 if hot < 0.3 else 2)
+	if _gust_tip_t > 0.0:
+		_gust_tip_t -= delta
+		_gust_tip.modulate.a = clampf(minf(_gust_tip_t / 0.5, (3.2 - _gust_tip_t) / 0.25), 0.0, 1.0)
+	else:
+		_gust_tip.modulate.a = 0.0
+	_wind_dial.queue_redraw()
+
+
+## Gust felt on your roof or at your kite, whichever is stronger.
+func _gust_here() -> float:
+	var g: float = wind.gust01_at(wind.origin)
+	if kite and kite.is_airborne():
+		g = maxf(g, wind.gust01_at(kite.global_position))
+	return g
+
+
+func _draw_wind_dial() -> void:
+	if wind == null:
+		return
+	var c := Vector2(24, 24)
+	var r := 22.0
+	var incoming: float = wind.gust_incoming
+	var g := _gust_here()
+	_wind_dial.draw_circle(c, r, Color(1.0, 0.94, 0.82, 0.08))
+	_wind_dial.draw_arc(c, r, 0.0, TAU, 40, Color(1.0, 0.84, 0.38, 0.35 + 0.5 * g), 1.5 + g * 1.5)
+	## Arrow in screen terms: up = blowing away from you, into the sky ahead.
+	var d: Vector3 = wind.wind_dir()
+	var ang := 0.0
+	var cam := get_viewport().get_camera_3d()
+	if cam:
+		var f := -cam.global_basis.z
+		f.y = 0.0
+		if f.length_squared() > 0.001:
+			f = f.normalized()
+			var rt := Vector3(-f.z, 0.0, f.x)
+			ang = atan2(d.dot(rt), d.dot(f))
+	var dir := Vector2(sin(ang), -cos(ang))
+	var side := Vector2(-dir.y, dir.x)
+	var len := r * lerpf(0.72, 0.9, g)
+	var tip := c + dir * len
+	var tail := c - dir * len * 0.8
+	var col := Color(1.0, 0.95, 0.85).lerp(Color(1.0, 0.8, 0.3), g)
+	_wind_dial.draw_line(tail, tip - dir * 6.0, col, 3.0, true)
+	_wind_dial.draw_colored_polygon(PackedVector2Array([tip, tip - dir * 9.0 + side * 6.0, tip - dir * 9.0 - side * 6.0]), col)
+	## Strength bar under the numbers: steady wind, then the gust on top.
+	var bx := 52.0
+	var by := 46.0
+	var bw := 66.0
+	var base_t := clampf((wind.last_speed - 4.0) / 16.0, 0.05, 1.0)
+	_wind_dial.draw_rect(Rect2(bx, by, bw, 5), Color(1.0, 0.84, 0.38, 0.14))
+	_wind_dial.draw_rect(Rect2(bx, by, bw * base_t, 5), Color(1.0, 0.94, 0.82, 0.85))
+	if incoming > 0.0 and g < 0.15:
+		## The front on its way: a pulsing sliver creeping in from the right.
+		var w := bw * 0.35 * incoming
+		_wind_dial.draw_rect(Rect2(bx + bw - w, by, w, 5), Color(1.0, 0.62, 0.22, 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.012)))

@@ -24,6 +24,21 @@ static func display_font() -> SystemFont:
 	return f
 
 
+static func kite_word_font() -> SystemFont:
+	var f := SystemFont.new()
+	f.font_names = PackedStringArray([
+		"Impact",
+		"Sitka Display",
+		"Arial Black",
+		"Franklin Gothic Heavy",
+		"Segoe UI Black",
+		"Tahoma",
+	])
+	f.font_weight = 900
+	f.font_stretch = 110
+	return f
+
+
 static func mark_font() -> SystemFont:
 	var f := SystemFont.new()
 	f.font_names = PackedStringArray([

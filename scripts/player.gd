@@ -22,6 +22,8 @@ var body_id: String = "boy"
 
 var _bob_t: float = 0.0
 var _fov_kick: float = 0.0
+var _pech_push: float = 0.0
+var _pech_want: float = 0.0
 var _spool_w: float = 0.0
 var _anim: AnimationPlayer
 var _idle: StringName = &""
@@ -107,6 +109,29 @@ func setup_avatar(id: String = "boy") -> void:
 	_play_clip(_idle)
 
 
+func clear_avatar() -> void:
+	if handle:
+		if head and handle.get_parent() != head:
+			handle.reparent(head)
+			handle.position = Vector3.ZERO
+			handle.rotation = Vector3.ZERO
+		var firki := handle.get_node_or_null("Firki")
+		if firki:
+			firki.queue_free()
+		var line_at := handle.get_node_or_null("LineOrigin")
+		if line_at:
+			line_at.queue_free()
+	var old := get_node_or_null("Body")
+	if old:
+		old.queue_free()
+	_anim = null
+	_idle = &""
+	_walk = &""
+	_yank = &""
+	_line_anim = false
+	body_id = "boy"
+
+
 func tick(delta: float, _tension: float, _pull: float, _slack: float, _bias: float, payout: float = 0.0, zoom: float = 0.0, kheench_held: bool = false, dheel_held: bool = false) -> void:
 	rotation.y = look_yaw
 	if head:
@@ -147,7 +172,9 @@ func tick(delta: float, _tension: float, _pull: float, _slack: float, _bias: flo
 	var z := clampf(zoom, 0.0, 1.0)
 	## Ease the last stretch of the bar so the kite fills the frame.
 	z = z * z * (3.0 - 2.0 * z)
-	camera.fov = lerpf(BASE_FOV, CLOSE_FOV, z) + _fov_kick * (1.0 - z * 0.92)
+	## A pech leans the view in a touch, harder as the strings grind.
+	_pech_push = move_toward(_pech_push, _pech_want, delta * (2.5 if _pech_want > _pech_push else 1.2))
+	camera.fov = lerpf(BASE_FOV, CLOSE_FOV, z) + _fov_kick * (1.0 - z * 0.92) - _pech_push * 5.0 * (1.0 - z * 0.8)
 	if handle:
 		var firki := handle.get_node_or_null("Firki")
 		if firki:
@@ -162,6 +189,11 @@ func tick(delta: float, _tension: float, _pull: float, _slack: float, _bias: flo
 			var accel := 70.0 if absf(target) > absf(_spool_w) else 22.0
 			_spool_w = move_toward(_spool_w, target, accel * delta)
 			firki.rotate_x(_spool_w * delta)
+
+
+## 0 = no pech, 1 = strings crossed and grinding hard.
+func set_pech_push(v: float) -> void:
+	_pech_want = clampf(v, 0.0, 1.0)
 
 
 func kick_speed_fov() -> void:
@@ -295,7 +327,15 @@ func _hide_slab(n: Node) -> void:
 func _world_aabb(n: Node) -> AABB:
 	var acc := AABB()
 	var first := true
-	if n is VisualInstance3D:
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		if mi.visible and mi.mesh != null:
+			var la := mi.get_aabb()
+			var slab := la.size.y < 0.22 and maxf(la.size.x, la.size.z) > 1.6 and la.position.y < 0.35
+			if not slab:
+				acc = mi.global_transform * la
+				first = false
+	elif n is VisualInstance3D and (n as Node3D).visible:
 		acc = (n as Node3D).global_transform * (n as VisualInstance3D).get_aabb()
 		first = false
 	for c in n.get_children():

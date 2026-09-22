@@ -267,7 +267,15 @@ func _hide_slab(n: Node) -> void:
 func _world_aabb(n: Node) -> AABB:
 	var acc := AABB()
 	var first := true
-	if n is VisualInstance3D:
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		if mi.visible and mi.mesh != null:
+			var la := mi.get_aabb()
+			var slab := la.size.y < 0.22 and maxf(la.size.x, la.size.z) > 1.6 and la.position.y < 0.35
+			if not slab:
+				acc = mi.global_transform * la
+				first = false
+	elif n is VisualInstance3D and (n as Node3D).visible:
 		acc = (n as Node3D).global_transform * (n as VisualInstance3D).get_aabb()
 		first = false
 	for c in n.get_children():

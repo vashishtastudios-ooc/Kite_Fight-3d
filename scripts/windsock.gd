@@ -54,11 +54,16 @@ func _process(delta: float) -> void:
 		target = Vector3(0.0, -0.4, -0.2)
 	target = target.normalized()
 	var speed := clampf(w.length() / 12.0, 0.15, 1.0)
+	## The leading edge of a gust reaches the roof first: the sock starts to
+	## twitch and lift a beat before the full gust.
+	var warn := wind.gust_incoming
+	speed = maxf(speed, lerpf(speed, 1.0, warn * 0.6))
+	target = (target + Vector3.UP * 0.25 * warn).normalized()
 	var origin := global_position + Vector3(0.0, 2.55, 0.0)
 	for i in _segs.size():
 		var lag := 1.0 + float(i) * 0.55
 		_dirs[i] = _dirs[i].lerp(target, clampf(delta * 7.0 / lag, 0.0, 1.0))
-		var flap := sin(wind.time * (9.0 + float(i) * 2.0)) * 0.08 * speed
+		var flap := sin(wind.time * (9.0 + float(i) * 2.0) * (1.0 + warn)) * (0.08 + 0.12 * warn) * speed
 		var dir: Vector3 = _dirs[i].normalized()
 		dir = dir.rotated(Vector3.UP, flap)
 		var pos := origin + dir * (0.22 + float(i) * 0.36)

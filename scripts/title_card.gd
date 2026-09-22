@@ -64,6 +64,15 @@ func _process(delta: float) -> void:
 		recede()
 
 
+func replay() -> void:
+	_played = false
+	_out = false
+	_flying = false
+	visible = true
+	modulate.a = 1.0
+	play()
+
+
 func recede() -> void:
 	if _out:
 		return

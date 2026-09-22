@@ -10,6 +10,7 @@ const TitleMarkSc := preload("res://scripts/title_mark.gd")
 signal quit_requested
 signal settings_changed
 signal kite_chosen(id: String)
+signal title_requested
 
 var settings: SettingsSc
 var profile: ProfileSc
@@ -20,9 +21,17 @@ var _settings_box: PanelContainer
 var _quality: OptionButton
 var _full: CheckButton
 var _hints: CheckButton
+var _mute: CheckButton
+var _vol_master: HSlider
+var _vol_amb: HSlider
+var _vol_sfx: HSlider
+var _quit_box: PanelContainer
+var _credits_box: PanelContainer
+var _buy_row: HBoxContainer
+var _pending_buy: String = ""
 var _how_box: PanelContainer
 var _kite_box: PanelContainer
-var _kite_row: HBoxContainer
+var _kite_row: GridContainer
 var _shop_coins: Label
 var _shop_note: Label
 var _profile_box: PanelContainer
@@ -38,6 +47,8 @@ var _in_settings: bool = false
 var _in_how: bool = false
 var _in_kites: bool = false
 var _in_profile: bool = false
+var _in_quit: bool = false
+var _in_credits: bool = false
 
 
 func is_open() -> bool:
@@ -45,6 +56,7 @@ func is_open() -> bool:
 
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	grow_horizontal = Control.GROW_DIRECTION_BOTH
 	grow_vertical = Control.GROW_DIRECTION_BOTH
@@ -80,6 +92,11 @@ func toggle() -> void:
 		_set_page(true, false)
 		_in_settings = false
 		return
+	if _open and (_in_quit or _in_credits):
+		_in_quit = false
+		_in_credits = false
+		open_pause()
+		return
 	if _open:
 		close()
 	else:
@@ -92,6 +109,11 @@ func open_pause() -> void:
 	_in_how = false
 	_in_kites = false
 	_in_profile = false
+	_in_quit = false
+	_in_credits = false
+	_pending_buy = ""
+	if _buy_row:
+		_buy_row.visible = false
 	get_tree().paused = true
 	refresh_profile()
 	_set_page(true, false)
@@ -103,6 +125,8 @@ func open_settings() -> void:
 	_in_how = false
 	_in_kites = false
 	_in_profile = false
+	_in_quit = false
+	_in_credits = false
 	get_tree().paused = true
 	_sync_widgets()
 	_set_page(true, true)
@@ -114,6 +138,8 @@ func open_how() -> void:
 	_in_how = true
 	_in_kites = false
 	_in_profile = false
+	_in_quit = false
+	_in_credits = false
 	get_tree().paused = true
 	_dim.visible = true
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -123,6 +149,10 @@ func open_how() -> void:
 		_kite_box.visible = false
 	if _profile_box:
 		_profile_box.visible = false
+	if _quit_box:
+		_quit_box.visible = false
+	if _credits_box:
+		_credits_box.visible = false
 	_how_box.visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
@@ -133,6 +163,8 @@ func open_kites() -> void:
 	_in_how = false
 	_in_kites = true
 	_in_profile = false
+	_in_quit = false
+	_in_credits = false
 	get_tree().paused = true
 	refresh_kite_cards("")
 	_dim.visible = true
@@ -142,6 +174,10 @@ func open_kites() -> void:
 	_how_box.visible = false
 	if _profile_box:
 		_profile_box.visible = false
+	if _quit_box:
+		_quit_box.visible = false
+	if _credits_box:
+		_credits_box.visible = false
 	if _kite_box:
 		_kite_box.visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -154,6 +190,9 @@ func close() -> void:
 	_in_how = false
 	_in_kites = false
 	_in_profile = false
+	_in_quit = false
+	_in_credits = false
+	_pending_buy = ""
 	get_tree().paused = false
 	_set_page(false, false)
 
@@ -164,6 +203,8 @@ func open_profile() -> void:
 	_in_how = false
 	_in_kites = false
 	_in_profile = true
+	_in_quit = false
+	_in_credits = false
 	get_tree().paused = true
 	refresh_profile()
 	_dim.visible = true
@@ -175,13 +216,17 @@ func open_profile() -> void:
 		_kite_box.visible = false
 	if _profile_box:
 		_profile_box.visible = true
+	if _quit_box:
+		_quit_box.visible = false
+	if _credits_box:
+		_credits_box.visible = false
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 
 func _set_page(show_dim: bool, settings_page: bool) -> void:
 	_dim.visible = show_dim
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP if show_dim else Control.MOUSE_FILTER_IGNORE
-	_pause_box.visible = show_dim and not settings_page and not _in_how and not _in_kites and not _in_profile
+	_pause_box.visible = show_dim and not settings_page and not _in_how and not _in_kites and not _in_profile and not _in_quit and not _in_credits
 	_settings_box.visible = show_dim and settings_page
 	if _how_box:
 		_how_box.visible = show_dim and _in_how
@@ -189,6 +234,10 @@ func _set_page(show_dim: bool, settings_page: bool) -> void:
 		_kite_box.visible = show_dim and _in_kites
 	if _profile_box:
 		_profile_box.visible = show_dim and _in_profile
+	if _quit_box:
+		_quit_box.visible = show_dim and _in_quit
+	if _credits_box:
+		_credits_box.visible = show_dim and _in_credits
 	mouse_filter = Control.MOUSE_FILTER_STOP if show_dim else Control.MOUSE_FILTER_IGNORE
 
 
@@ -225,11 +274,20 @@ func _build() -> void:
 	pause_col.add_child(_btn("Shop", open_kites))
 	pause_col.add_child(_btn("How to play", open_how))
 	pause_col.add_child(_btn("Settings", open_settings))
-	pause_col.add_child(_btn("Quit", func() -> void: quit_requested.emit()))
+	pause_col.add_child(_btn("Credits", open_credits))
+	pause_col.add_child(_btn("Back to rooftop", _ask_title))
+	pause_col.add_child(_btn("Quit", _ask_quit))
 
 	_settings_box = _make_card()
 	center.add_child(_settings_box)
-	var set_col := _vbox(_settings_box)
+	var set_scroll := ScrollContainer.new()
+	set_scroll.custom_minimum_size = Vector2(420, 500)
+	set_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_settings_box.add_child(set_scroll)
+	var set_col := VBoxContainer.new()
+	set_col.add_theme_constant_override("separation", 10)
+	set_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	set_scroll.add_child(set_col)
 	set_col.add_child(_title("SETTINGS"))
 	set_col.add_child(_caption("Graphics quality is the main cost. Zoom is free."))
 	set_col.add_child(_gap(8))
@@ -262,6 +320,19 @@ func _build() -> void:
 	_style_check(_hints)
 	set_col.add_child(_hints)
 
+	set_col.add_child(_gap(6))
+	set_col.add_child(_caption("SOUND"))
+	_mute = CheckButton.new()
+	_mute.text = "Mute"
+	_mute.toggled.connect(_on_mute)
+	_style_check(_mute)
+	set_col.add_child(_mute)
+	_vol_master = _attach_vol(set_col, "Master", func(v: float) -> void: _on_vol("master", v))
+	_vol_amb = _attach_vol(set_col, "City & wind", func(v: float) -> void: _on_vol("ambience", v))
+	_vol_sfx = _attach_vol(set_col, "Kite paper", func(v: float) -> void: _on_vol("sfx", v))
+	set_col.add_child(_gap(6))
+	set_col.add_child(_caption("WASD walk · Q bite · E slip · arrows reel · Space toss · R relaunch · V kite-cam · Esc menu"))
+
 	set_col.add_child(_gap(10))
 	set_col.add_child(_btn("How to play", open_how))
 	set_col.add_child(_btn("Back", _back_from_settings))
@@ -272,7 +343,7 @@ func _build() -> void:
 	_fill_how(_how_box)
 
 	_kite_box = _make_card()
-	_kite_box.custom_minimum_size = Vector2(640, 360)
+	_kite_box.custom_minimum_size = Vector2(900, 560)
 	center.add_child(_kite_box)
 	_fill_kites(_kite_box)
 
@@ -281,12 +352,24 @@ func _build() -> void:
 	center.add_child(_profile_box)
 	_fill_profile(_profile_box)
 
+	_quit_box = _make_card()
+	_quit_box.custom_minimum_size = Vector2(440, 0)
+	center.add_child(_quit_box)
+	_fill_quit(_quit_box)
+
+	_credits_box = _make_card()
+	_credits_box.custom_minimum_size = Vector2(520, 0)
+	center.add_child(_credits_box)
+	_fill_credits(_credits_box)
+
 
 func _back_from_settings() -> void:
 	_in_settings = false
 	_in_how = false
 	_in_kites = false
 	_in_profile = false
+	_in_quit = false
+	_in_credits = false
 	open_pause()
 
 
@@ -298,13 +381,30 @@ func _fill_kites(card: PanelContainer) -> void:
 	_shop_coins = _caption("0 coins")
 	_shop_coins.add_theme_color_override("font_color", Brand.GOLD)
 	v.add_child(_shop_coins)
-	v.add_child(_caption("Buy a sail with coins. Saffron is free."))
-	_kite_row = HBoxContainer.new()
-	_kite_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	_kite_row.add_theme_constant_override("separation", 14)
-	v.add_child(_kite_row)
+	v.add_child(_caption("Buy a sail with coins. Saffron, Adha and Maang are free. Cosmetics only — they do not cut faster."))
+	## A grid that scrolls, so the patang collection can keep growing.
+	var shop_scroll := ScrollContainer.new()
+	shop_scroll.custom_minimum_size = Vector2(0, 372)
+	shop_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	shop_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	v.add_child(shop_scroll)
+	var shop_center := CenterContainer.new()
+	shop_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shop_scroll.add_child(shop_center)
+	_kite_row = GridContainer.new()
+	_kite_row.columns = 5
+	_kite_row.add_theme_constant_override("h_separation", 12)
+	_kite_row.add_theme_constant_override("v_separation", 12)
+	shop_center.add_child(_kite_row)
 	_shop_note = _caption("")
 	v.add_child(_shop_note)
+	_buy_row = HBoxContainer.new()
+	_buy_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_buy_row.add_theme_constant_override("separation", 12)
+	_buy_row.visible = false
+	_buy_row.add_child(_btn("Buy", _confirm_buy))
+	_buy_row.add_child(_btn("Not now", _cancel_buy))
+	v.add_child(_buy_row)
 	v.add_child(_btn("Back", open_pause))
 	refresh_kite_cards("")
 
@@ -399,15 +499,18 @@ func _on_kite_pick(id: String) -> void:
 	id = KiteSkins.clamp_id(id)
 	if profile:
 		if profile.owns(id):
+			_pending_buy = ""
+			if _buy_row:
+				_buy_row.visible = false
 			profile.set_kite(id)
 			if _shop_note:
-				_shop_note.text = ""
-		elif profile.buy(id):
-			if _shop_note:
-				_shop_note.text = "Bought %s." % KiteSkins.title_for(id)
+				_shop_note.text = "Equipped %s." % KiteSkins.title_for(id)
 		else:
+			_pending_buy = id
 			if _shop_note:
-				_shop_note.text = "Need %d coins." % KiteSkins.price_for(id)
+				_shop_note.text = "Buy %s for %d coins?" % [KiteSkins.title_for(id), KiteSkins.price_for(id)]
+			if _buy_row:
+				_buy_row.visible = true
 			call_deferred("refresh_kite_cards", profile.kite_id)
 			return
 		if settings:
@@ -424,12 +527,41 @@ func _on_kite_pick(id: String) -> void:
 	call_deferred("refresh_kite_cards", id)
 
 
+func _confirm_buy() -> void:
+	if profile == null or _pending_buy == "":
+		return
+	var id := KiteSkins.clamp_id(_pending_buy)
+	if profile.buy(id):
+		if _shop_note:
+			_shop_note.text = "Bought %s." % KiteSkins.title_for(id)
+		if settings:
+			settings.kite_id = profile.kite_id
+			settings.save_to_disk()
+		kite_chosen.emit(profile.kite_id)
+		refresh_profile()
+		call_deferred("refresh_kite_cards", profile.kite_id)
+	else:
+		if _shop_note:
+			_shop_note.text = "Need %d coins." % KiteSkins.price_for(id)
+	_pending_buy = ""
+	if _buy_row:
+		_buy_row.visible = false
+
+
+func _cancel_buy() -> void:
+	_pending_buy = ""
+	if _buy_row:
+		_buy_row.visible = false
+	if _shop_note:
+		_shop_note.text = ""
+
+
 func _fill_how(card: PanelContainer) -> void:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
 	card.add_child(v)
 	v.add_child(_title("HOW TO PLAY"))
-	v.add_child(_caption("A dusk rooftop. Charge pink. Cut their string."))
+	v.add_child(_caption("A dusk rooftop. Cross the strings. Cut their manjha."))
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(0, 340)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -438,10 +570,10 @@ func _fill_how(card: PanelContainer) -> void:
 	body.add_theme_constant_override("separation", 12)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(body)
-	body.add_child(_how_block("FLY", Color(0.55, 0.82, 1.0), "Q darts the nose. E sags the line (dheel). Wheel pays line in or out. Space tosses. R relaunches. Dart with the wind to go faster — into the wind is slower."))
-	body.add_child(_how_block("DODGE", Color(1.0, 0.45, 0.28), "Diwali rockets lock where you were. Q or E off the path before they burst. Three real dodges fill the CUT CHARGE pips. A hit knocks you down and empties the pips."))
-	body.add_child(_how_block("CUT", Color(1.0, 0.38, 0.72), "Three pips — kite glows pink. The next Q is a fast dash. Steer that dash through their manjha (the string). Hit = wo kaata. Miss = bar empty, fly on. First to 2 cuts wins the evening."))
-	body.add_child(_how_block("SLIP", Color(0.95, 0.78, 0.35), "If they glow pink, tap E so your kite drops off their line. Sag off the cross and their dash misses. Stay slack while still crossed and their dash cuts you."))
+	body.add_child(_how_block("FLY", Color(0.55, 0.82, 1.0), "Q darts the nose. E sags the line (dheel). Wheel pays line in or out. Space tosses. R relaunches. A taut Q still darts into the wind — a gust lifts you, it does not shove you back. Slack belongs to the breeze."))
+	body.add_child(_how_block("DODGE", Color(1.0, 0.45, 0.28), "Save the Kite: Diwali rockets lock where you were. Q or E off the path before they burst. Three real dodges fill a pink dart. A hit knocks you down."))
+	body.add_child(_how_block("CUT", Color(1.0, 0.38, 0.72), "Battle: steer so the two manjhas make a plus sign. Closer to 90° saws faster. Hold Q to bite. Miss the angle and you ghost through. First to 2 kaata."))
+	body.add_child(_how_block("SLIP", Color(0.95, 0.78, 0.35), "Hold E to drop off the X. You keep your string and lose height. Stay on the cross while they bite and your manjha thins. Watch the small string bars."))
 	v.add_child(_btn("Back", open_pause))
 
 
@@ -483,6 +615,14 @@ func _sync_widgets() -> void:
 		_full.set_pressed_no_signal(settings.fullscreen)
 	if _hints:
 		_hints.set_pressed_no_signal(settings.show_hints)
+	if _mute:
+		_mute.set_pressed_no_signal(settings.mute)
+	if _vol_master:
+		_vol_master.set_value_no_signal(settings.vol_master * 100.0)
+	if _vol_amb:
+		_vol_amb.set_value_no_signal(settings.vol_ambience * 100.0)
+	if _vol_sfx:
+		_vol_sfx.set_value_no_signal(settings.vol_sfx * 100.0)
 
 
 func _on_quality(index: int) -> void:
@@ -507,6 +647,98 @@ func _on_hints(on: bool) -> void:
 	settings.show_hints = on
 	settings.save_to_disk()
 	settings_changed.emit()
+
+
+func _on_mute(on: bool) -> void:
+	if settings == null:
+		return
+	settings.mute = on
+	settings.save_to_disk()
+	settings_changed.emit()
+
+
+func _on_vol(which: String, v: float) -> void:
+	if settings == null:
+		return
+	var lin := clampf(v / 100.0, 0.0, 1.0)
+	match which:
+		"master":
+			settings.vol_master = lin
+		"ambience":
+			settings.vol_ambience = lin
+		"sfx":
+			settings.vol_sfx = lin
+	settings.save_to_disk()
+	settings_changed.emit()
+
+
+func _ask_quit() -> void:
+	_in_quit = true
+	_in_credits = false
+	_in_settings = false
+	_in_how = false
+	_in_kites = false
+	_in_profile = false
+	_set_page(true, false)
+
+
+func _ask_title() -> void:
+	close()
+	title_requested.emit()
+
+
+func open_credits() -> void:
+	_open = true
+	_in_credits = true
+	_in_quit = false
+	_in_settings = false
+	_in_how = false
+	_in_kites = false
+	_in_profile = false
+	get_tree().paused = true
+	_set_page(true, false)
+
+
+func _fill_quit(card: PanelContainer) -> void:
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	card.add_child(v)
+	v.add_child(_title("LEAVE?"))
+	v.add_child(_caption("Close the game. Progress on this rooftop is already saved."))
+	v.add_child(_btn("Quit to desktop", func() -> void: quit_requested.emit()))
+	v.add_child(_btn("Stay", open_pause))
+
+
+func _fill_credits(card: PanelContainer) -> void:
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	card.add_child(v)
+	v.add_child(_title("CREDITS"))
+	v.add_child(_caption("KITE BATTLE 3D  ·  Patangbaaz"))
+	v.add_child(_caption("A dusk rooftop kite fight. Generated city. Your manjha vs theirs."))
+	v.add_child(_caption("Paper flutter, wind, and city bed are original recordings for this game."))
+	v.add_child(_caption("People and kite meshes are licensed 3D kits. Godot Engine: MIT."))
+	v.add_child(_btn("Back", open_pause))
+
+
+func _attach_vol(parent: VBoxContainer, caption: String, cb: Callable) -> HSlider:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	var lab := Label.new()
+	lab.text = caption
+	lab.custom_minimum_size = Vector2(140, 0)
+	lab.add_theme_font_size_override("font_size", 18)
+	row.add_child(lab)
+	var s := HSlider.new()
+	s.min_value = 0.0
+	s.max_value = 100.0
+	s.step = 1.0
+	s.custom_minimum_size = Vector2(220, 28)
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.value_changed.connect(cb)
+	row.add_child(s)
+	parent.add_child(row)
+	return s
 
 
 func _make_card() -> PanelContainer:

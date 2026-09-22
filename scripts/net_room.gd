@@ -165,3 +165,12 @@ func _handle(msg: Dictionary) -> void:
 func _resend_hello() -> void:
 	if _open and _ws and _ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
 		_ws.send_text(JSON.stringify(_hello_payload()))
+
+
+func hangup() -> void:
+	_open = false
+	join_code = ""
+	match_id = ""
+	if _ws:
+		_ws.close()
+		_ws = WebSocketPeer.new()

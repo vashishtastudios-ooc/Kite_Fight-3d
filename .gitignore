@@ -13,6 +13,9 @@ server/.env
 server/node_modules/
 servervps.zip
 
+# Downloaded MCP zip (plugin lives in addons/godot_mcp)
+godot-mcp-*/
+
 # Local captures
 debug_preview.png
 debug_preview.png.import

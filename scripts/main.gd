@@ -61,6 +61,7 @@ var _peer_card: Dictionary = {}
 var _peer_id: String = ""
 var _remote_state: Dictionary = {}
 var _send_t: float = 0.0
+var _wind_audio: Node
 const INTRO_CAM_DUR := 6.0
 const BODY_BOY := preload("res://assets/people/stylized+boy+3d+model (1).glb")
 const BODY_GIRL := preload("res://assets/people/stylized+female+3d+newmodel.glb")
@@ -83,6 +84,10 @@ func _ready() -> void:
 	settings.load_from_disk()
 	_profile = ProfileSc.new()
 	_profile.load_from_disk()
+	## Testing: editor/debug runs top coins up to 1000 so any kite can be bought.
+	## is_debug_build() is false in release exports, so this never ships.
+	if OS.is_debug_build() and _profile.coins < 1000:
+		_profile.coins = 1000
 	var sync := preload("res://scripts/profile_sync.gd").new()
 	sync.name = "ProfileSync"
 	add_child(sync)
@@ -102,6 +107,7 @@ func _ready() -> void:
 		Color(0.12, 0.48, 0.22),
 		Color(0.98, 0.95, 0.82),
 	]
+	rival.is_rival = true
 	rival.setup(wind, city, rival_colors, KiteSkins.rival_id(settings.kite_id))
 	rival.is_ai = true
 	var rival_hand := city.rival_hand_position()
@@ -118,6 +124,7 @@ func _ready() -> void:
 	hud.mode_chosen.connect(_on_mode_chosen)
 	hud.online_host.connect(_on_online_host)
 	hud.online_join.connect(_on_online_join)
+	hud.title_requested.connect(_return_to_title)
 	_net = NetRoomSc.new()
 	_net.name = "NetRoom"
 	add_child(_net)
@@ -128,7 +135,9 @@ func _ready() -> void:
 	_net.kaata.connect(_on_net_kaata)
 	_net.gone.connect(_on_net_gone)
 	_net.fail.connect(_on_net_fail)
+	wind.origin = city.spawn_position
 	if pech:
+		pech.wind = wind
 		pech.kaata.connect(_on_match_kaata)
 		pech.cut_wanted.connect(_on_cut_wanted)
 	if kite:
@@ -149,6 +158,15 @@ func _ready() -> void:
 	air.name = "WindVfx"
 	add_child(air)
 	air.setup(wind, city.spawn_position)
+	var far_kites := preload("res://scripts/sky_kites.gd").new()
+	far_kites.name = "SkyKites"
+	add_child(far_kites)
+	far_kites.setup(wind, city.spawn_position)
+	var wind_audio := preload("res://scripts/wind_audio.gd").new()
+	wind_audio.name = "WindAudio"
+	add_child(wind_audio)
+	wind_audio.setup(wind)
+	_wind_audio = wind_audio
 	wind.sample(player.global_position + Vector3(0.0, 4.0, -8.0), 0.2, true)
 	## Cold open on the sky. The in-hand charkhi and the rooftop flyer read as
 	## "ready"; the 1.5m sail is hidden until the toss so it never fills the
@@ -158,7 +176,9 @@ func _ready() -> void:
 	_snap_camera_to_sky()
 	_setup_intro_cam()
 	_spawn_title_kite()
-	print("Kite Battle 3d rooftop ready. Buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
+	if hud:
+		hud.set_letterbox(true, "Jaipur dusk. One roof. Two strings.", "SPACE  skip")
+	print("Kite Battle 3d rooftop ready. Play-area buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
 
 
 func _setup_kite_cams() -> void:
@@ -209,6 +229,10 @@ func _cam_look(cam: Camera3D, target: Vector3, up: Vector3 = Vector3.UP) -> void
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		var mb := event as InputEventMouseButton
+		if _intro_active and not _char_ui_shown and mb.button_index == MOUSE_BUTTON_LEFT:
+			_skip_intro_cam()
+			get_viewport().set_input_as_handled()
+			return
 		if hud and hud.over_controls():
 			pass
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
@@ -235,6 +259,8 @@ func _physics_process(delta: float) -> void:
 		if kite.phase == KiteSc.Phase.GROUNDED or kite.phase == KiteSc.Phase.CRASHED or kite.phase == KiteSc.Phase.CUT:
 			kite.launch()
 			_launch_look = 1.6
+	elif Input.is_action_just_pressed("launch") and _intro_active and not _char_ui_shown:
+		_skip_intro_cam()
 	if Input.is_action_just_pressed("relaunch"):
 		kite.relaunch()
 		_launch_look = 1.4
@@ -288,6 +314,9 @@ func _physics_process(delta: float) -> void:
 		_rival_ai.tick(delta)
 	if pech and _game_mode == "battle":
 		pech.tick(delta, kite, rival)
+		player.set_pech_push(pech.grind())
+	else:
+		player.set_pech_push(0.0)
 	player.tick(delta, kite.tension, kite.pull, kite.slack, bias, kite.payout_rate, hud.zoom if hud else 0.0, kheench, dheel)
 
 	if Input.is_action_just_pressed("kite_back_view"):
@@ -300,12 +329,7 @@ func _physics_process(delta: float) -> void:
 	if _intro_active and _intro_cam:
 		_update_intro_cam(delta)
 		if not _char_ui_shown and _intro_cam_t >= 1.0:
-			_char_ui_shown = true
-			if hud:
-				hud.show_character_select()
-			if _title_kite and _title_kite.has_method("recede"):
-				_title_kite.recede()
-				_title_kite = null
+			_finish_intro_cam()
 	_launch_look = maxf(0.0, _launch_look - delta)
 
 
@@ -417,6 +441,103 @@ func _update_intro_cam(delta: float) -> void:
 	var q1 := end_xf.basis.get_rotation_quaternion()
 	_intro_cam.global_transform = Transform3D(Basis(q0.slerp(q1, e)), pos)
 	_intro_cam.fov = lerpf(_intro_cam_start_fov, player.camera.fov, e)
+
+
+func _skip_intro_cam() -> void:
+	if _intro_cam == null or _char_ui_shown:
+		return
+	_intro_cam_t = 1.0
+	_update_intro_cam(0.0)
+	_finish_intro_cam()
+
+
+func _finish_intro_cam() -> void:
+	if _char_ui_shown:
+		return
+	_char_ui_shown = true
+	if hud:
+		hud.show_character_select()
+	if _title_kite and _title_kite.has_method("recede"):
+		_title_kite.recede()
+		_title_kite = null
+
+
+func _ensure_preview_people() -> void:
+	var cam := city.spawn_position + Vector3(0.0, 1.45, 3.4)
+	if _preview_boy == null or not is_instance_valid(_preview_boy):
+		_preview_boy = PersonSc.new()
+		_preview_boy.name = "PreviewBoy"
+		add_child(_preview_boy)
+		_preview_boy.setup(city.spawn_position + Vector3(-1.55, 0.0, -2.15), cam, null, BODY_BOY, false, true)
+	if _preview_girl == null or not is_instance_valid(_preview_girl):
+		_preview_girl = PersonSc.new()
+		_preview_girl.name = "PreviewGirl"
+		add_child(_preview_girl)
+		_preview_girl.setup(city.spawn_position + Vector3(1.55, 0.0, -2.15), cam, null, BODY_GIRL, false, true)
+
+
+func _return_to_title() -> void:
+	_online = false
+	_net_live = false
+	_peer_card = {}
+	_peer_id = ""
+	_remote_state = {}
+	if _net and _net.has_method("hangup"):
+		_net.hangup()
+	_flyer_picked = false
+	_character_picked = false
+	_game_mode = ""
+	_intro_active = true
+	_char_ui_shown = false
+	_cam_chase = false
+	_match_cuts = 0
+	_match_paid = false
+	_save_dodges = 0
+	_save_paid = false
+	_kheench_held = false
+	_dheel_held = false
+	_launch_look = 0.0
+	if pech:
+		pech.net_mode = false
+		pech.player_wins = 0
+		pech.rival_wins = 0
+	if _rockets:
+		_rockets.enabled = false
+	_set_back_view(false)
+	if kite:
+		kite.set_kheench(false)
+		kite.set_dheel(false)
+		kite.park_on_roof()
+		kite.visible = false
+	if rival:
+		rival.is_ai = true
+		rival.park_on_roof()
+		rival.visible = false
+	if player:
+		player.intro_lock = true
+		player.clear_avatar()
+		player.global_position = city.spawn_position
+		player.look_yaw = 0.0
+		player.look_pitch = -0.06
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if _terrace_mate:
+		_terrace_mate.queue_free()
+		_terrace_mate = null
+	_ensure_preview_people()
+	if _intro_cam:
+		_intro_cam.queue_free()
+		_intro_cam = null
+	if player and player.camera:
+		player.camera.current = false
+	_setup_intro_cam()
+	_snap_camera_to_sky()
+	if _title_kite:
+		_title_kite.queue_free()
+		_title_kite = null
+	_spawn_title_kite()
+	if hud:
+		hud.reset_to_title()
+		hud.set_letterbox(true, "Jaipur dusk. One roof. Two strings.", "SPACE  skip")
 
 
 func _snap_camera_to_sky() -> void:
@@ -541,6 +662,12 @@ func _build_handle() -> void:
 	var handle := player.handle
 	if handle == null:
 		return
+	var old_f := handle.get_node_or_null("Firki")
+	if old_f:
+		old_f.queue_free()
+	var old_l := handle.get_node_or_null("LineOrigin")
+	if old_l:
+		old_l.queue_free()
 	var firki := Node3D.new()
 	firki.name = "Firki"
 	handle.add_child(firki)
@@ -683,8 +810,8 @@ func _on_mode_chosen(id: String) -> void:
 			hud.game_mode = "battle"
 		if _rockets:
 			_rockets.enabled = false
-		kite.fight_pips = true
-		rival.fight_pips = true
+		kite.fight_pips = false
+		rival.fight_pips = false
 		rival.is_ai = false
 		if pech:
 			pech.net_mode = true
@@ -699,8 +826,8 @@ func _on_mode_chosen(id: String) -> void:
 		hud.game_mode = _game_mode
 	if _rockets:
 		_rockets.enabled = _game_mode == "save"
-	kite.fight_pips = _game_mode == "battle"
-	rival.fight_pips = _game_mode == "battle"
+	kite.fight_pips = false
+	rival.fight_pips = false
 	if _game_mode == "save":
 		rival.visible = false
 	else:
@@ -784,9 +911,11 @@ func _on_net_kaata(winner_id: String, a_cuts: int, b_cuts: int) -> void:
 	var i_won: bool = winner_id != "" and _net != null and winner_id == _net.play_id
 	if i_won:
 		rival.apply_cut()
+		kite.restore_manjha()
 		_match_cuts += 1
 	else:
 		kite.apply_cut()
+		rival.restore_manjha()
 	if _net and _net.slot == "a":
 		pech.player_wins = a_cuts
 		pech.rival_wins = b_cuts
