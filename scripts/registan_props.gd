@@ -224,6 +224,8 @@ func town(area: Rect2, keep_a: Rect2, keep_b: Rect2, ground_y: float, map: Node)
 			if g < ground_y - 3.0:
 				z += step
 				continue
+			## Detail only where it can be seen: the far streets are plain.
+			var plain := jz > keep_a.end.y + 70.0
 			var w := rng.randf_range(6.0, 12.5)
 			var d := rng.randf_range(6.0, 12.5)
 			## A mix of low courtyard houses and tall merchant blocks.
@@ -236,12 +238,15 @@ func town(area: Rect2, keep_a: Rect2, keep_b: Rect2, ground_y: float, map: Node)
 			frustum(Vector2(w, d), Vector2(w - 0.4, d - 0.4), tall, Vector3.ZERO, mat(SAND if rng.randf() < 0.6 else SAND_DEEP), b)
 			box(Vector3(w + 0.4, 0.5, d + 0.4), Vector3(0.0, tall + 0.2, 0.0), mat(SAND_LIT), 0.0, b)
 			## Only some roofs are parapeted; the rest are plain terraces.
-			if rng.randf() < 0.45:
+			if plain:
+				pass
+			elif rng.randf() < 0.45:
 				_parapet(b, w + 0.4, d + 0.4, tall + 0.45)
 			else:
 				box(Vector3(w + 0.4, 0.5, 0.4), Vector3(0.0, tall + 0.65, -d * 0.5), mat(SAND_LIT), 0.0, b)
-			for i in 2:
-				arch_window(Vector3(rng.randf_range(-w * 0.3, w * 0.3), 1.6 + float(i) * 2.8, -d * 0.5), Vector3(0, 0, -1), 0.8, 1.3, rng.randf() < 0.4, b)
+			if not plain:
+				for i in 2:
+					arch_window(Vector3(rng.randf_range(-w * 0.3, w * 0.3), 1.6 + float(i) * 2.8, -d * 0.5), Vector3(0, 0, -1), 0.8, 1.3, rng.randf() < 0.4, b)
 			if rng.randf() < 0.22:
 				var dome := sphere(w * 0.3, w * 0.42, Vector3(0.0, tall + 1.0, 0.0), mat(SAND_LIT), b)
 				dome.scale = Vector3(1.0, 0.8, 1.0)
@@ -249,6 +254,107 @@ func town(area: Rect2, keep_a: Rect2, keep_b: Rect2, ground_y: float, map: Node)
 			map.building_aabbs.append(AABB(Vector3(jx - w * 0.5, g - 1.0, jz - d * 0.5), Vector3(w, tall + 1.0, d)))
 			z += step
 		x += step
+
+
+# ── Town landmarks and wall ──────────────────────────────────────────────────
+
+## The pieces that give the skyline its shape behind the flyer: a palace with
+## pavilions, a temple spire, and a stepped water tank.
+func landmarks(area: Rect2, ground_y: float, map: Node) -> void:
+	var c := area.get_center()
+	var lit := mat(SAND_LIT)
+	## Palace: a broad block with a taller wing, balconies and roof chhatris.
+	var p := Vector3(c.x - 26.0, ground_y, c.y + 18.0)
+	var pal := Node3D.new()
+	pal.name = "Palace"
+	root.add_child(pal)
+	pal.position = p
+	frustum(Vector2(34.0, 22.0), Vector2(32.0, 20.0), 14.0, Vector3.ZERO, mat(SAND), pal)
+	box(Vector3(35.0, 0.8, 23.0), Vector3(0.0, 14.4, 0.0), lit, 0.0, pal)
+	_parapet(pal, 35.0, 23.0, 14.8)
+	frustum(Vector2(16.0, 14.0), Vector2(15.0, 13.0), 9.0, Vector3(9.0, 14.8, 1.0), mat(SAND), pal)
+	box(Vector3(17.0, 0.7, 15.0), Vector3(9.0, 24.1, 1.0), lit, 0.0, pal)
+	for i in 4:
+		var x := lerpf(-13.0, 13.0, float(i) / 3.0)
+		arch_window(Vector3(x, 6.0, -11.02), Vector3(0, 0, -1), 1.4, 2.4, i % 2 == 0, pal)
+		jharokha(Vector3(x * 0.8, 10.5, -11.0), Vector3(0, 0, -1), pal)
+	for sx in [-1.0, 1.0]:
+		chhatri(p + Vector3(sx * 15.0, 15.0, -8.0), 0.85)
+	chhatri(p + Vector3(9.0, 24.5, 1.0), 0.95)
+	map.building_aabbs.append(AABB(p + Vector3(-17.5, 0.0, -11.5), Vector3(35.0, 24.0, 23.0)))
+	## Temple: a square hall under a tapering shikhara with a gold finial.
+	var t := Vector3(c.x + 30.0, ground_y, c.y - 6.0)
+	var tem := Node3D.new()
+	tem.name = "Temple"
+	root.add_child(tem)
+	tem.position = t
+	frustum(Vector2(16.0, 16.0), Vector2(15.0, 15.0), 7.0, Vector3.ZERO, mat(SAND), tem)
+	box(Vector3(17.0, 0.7, 17.0), Vector3(0.0, 7.4, 0.0), lit, 0.0, tem)
+	## Shikhara: stacked, shrinking storeys curving to a point.
+	var y := 7.8
+	var w := 11.0
+	for i in 9:
+		var f := float(i) / 8.0
+		var h := lerpf(1.9, 0.9, f)
+		frustum(Vector2(w, w), Vector2(w * 0.86, w * 0.86), h, Vector3(0.0, y, 0.0), mat(SAND if i % 2 == 0 else SAND_LIT), tem)
+		y += h
+		w *= 0.86
+	cyl(w * 0.6, w * 0.3, 1.2, Vector3(0.0, y + 0.6, 0.0), lit, 10, tem)
+	sphere(0.9, 1.2, Vector3(0.0, y + 1.8, 0.0), mat(CARVE), tem)
+	cyl(0.12, 0.2, 1.6, Vector3(0.0, y + 3.0, 0.0), mat(CARVE), 6, tem)
+	arch_window(Vector3(0.0, 3.4, -8.02), Vector3(0, 0, -1), 2.6, 4.4, true, tem)
+	map.building_aabbs.append(AABB(t + Vector3(-8.5, 0.0, -8.5), Vector3(17.0, y + 4.0, 17.0)))
+	## Water tank: a square of steps down to still water, with a pavilion.
+	var k := Vector3(c.x - 4.0, ground_y, c.y + 60.0)
+	var tank := Node3D.new()
+	tank.name = "Tank"
+	root.add_child(tank)
+	tank.position = k
+	var side := 34.0
+	for i in 6:
+		var s := side - float(i) * 3.4
+		box(Vector3(s, 1.2, s), Vector3(0.0, -0.6 - float(i) * 1.2, 0.0), mat(SAND_DEEP if i % 2 == 0 else SAND_LIT), 0.0, tank)
+	box(Vector3(12.0, 0.3, 12.0), Vector3(0.0, -7.4, 0.0), mat(TEAL), 0.0, tank)
+	chhatri(k + Vector3(side * 0.5 + 3.0, 0.0, 0.0), 0.8)
+
+
+## A battered wall with round bastions closing the town in — open on the side
+## the kites fly, so it never fences the sky.
+func town_wall(area: Rect2, ground_y: float, map: Node) -> void:
+	var m := mat(SAND)
+	var lit := mat(SAND_LIT)
+	var corners := [
+		[Vector2(area.position.x + 4.0, area.position.y + 30.0), Vector2(area.position.x + 4.0, area.end.y - 4.0)],
+		[Vector2(area.position.x + 4.0, area.end.y - 4.0), Vector2(area.end.x - 4.0, area.end.y - 4.0)],
+		[Vector2(area.end.x - 4.0, area.end.y - 4.0), Vector2(area.end.x - 4.0, area.position.y + 30.0)],
+	]
+	for run in corners:
+		var a: Vector2 = run[0]
+		var b: Vector2 = run[1]
+		var len := a.distance_to(b)
+		var dir := (b - a) / len
+		var yaw := atan2(dir.x, dir.y)
+		var n := int(len / 34.0) + 1
+		for i in n + 1:
+			var t := float(i) / float(n)
+			var p := a.lerp(b, t)
+			var g: float = map.height_at(p.x, p.y)
+			cyl(4.6, 3.9, 13.0, Vector3(p.x, g + 5.5, p.y), m, 10)
+			cyl(4.2, 4.2, 1.0, Vector3(p.x, g + 12.4, p.y), lit, 10)
+			for k in 8:
+				var aa := TAU * float(k) / 8.0
+				box(Vector3(1.0, 1.1, 1.0), Vector3(p.x + cos(aa) * 3.7, g + 13.3, p.y + sin(aa) * 3.7), lit, aa)
+			if i == n:
+				continue
+			var q := a.lerp(b, float(i + 1) / float(n))
+			var mid := (p + q) * 0.5
+			var gm: float = map.height_at(mid.x, mid.y)
+			var seg := p.distance_to(q)
+			var wall := frustum(Vector2(seg, 4.2), Vector2(seg, 3.0), 10.0, Vector3(mid.x, gm, mid.y), m)
+			wall.rotation.y = yaw + PI * 0.5
+			var cap := box(Vector3(seg, 0.7, 3.4), Vector3(mid.x, gm + 10.3, mid.y), lit, yaw + PI * 0.5)
+			cap.name = "WallCap"
+			map.building_aabbs.append(AABB(Vector3(mid.x - seg * 0.5, gm, mid.y - 2.5), Vector3(seg, 11.0, 5.0)))
 
 
 # ── Fort ─────────────────────────────────────────────────────────────────────
@@ -332,36 +438,101 @@ func rand_from(i: int) -> float:
 	return fposmod(sin(float(i) * 12.9898) * 43758.5453, 1.0)
 
 
-## A camel and its shadow-dark silhouette, plodding.
-func camel(pos: Vector3, yaw: float, parent: Node3D) -> void:
+## Silhouette material: flat black-brown whatever the light does, so a camel
+## on a crest reads as a cut-out against the sun.
+func shadow_mat() -> StandardMaterial3D:
+	var m := mat(Color(0.10, 0.05, 0.05))
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return m
+
+
+## A camel, built so its legs can swing: returns the node with the four legs
+## kept as children for the walk.
+func camel(pos: Vector3, yaw: float, parent: Node3D) -> Node3D:
 	var c := Node3D.new()
+	c.name = "Camel"
 	parent.add_child(c)
 	c.position = pos
 	c.rotation.y = yaw
-	var hide := mat(Color(0.42, 0.28, 0.18))
+	var hide := shadow_mat()
 	var body := sphere(0.95, 1.5, Vector3(0.0, 1.9, 0.0), hide, c)
 	body.scale = Vector3(0.85, 0.75, 1.7)
-	var hump := sphere(0.55, 0.9, Vector3(0.0, 2.5, 0.1), hide, c)
-	hump.scale = Vector3(0.9, 1.0, 1.1)
-	cyl(0.18, 0.22, 1.7, Vector3(0.0, 2.7, -1.25), hide, 6, c).rotation.x = 0.45
-	var head := sphere(0.3, 0.5, Vector3(0.0, 3.4, -1.75), hide, c)
-	head.scale = Vector3(0.8, 0.8, 1.4)
+	var hump := sphere(0.58, 0.95, Vector3(0.0, 2.55, 0.1), hide, c)
+	hump.scale = Vector3(0.9, 1.05, 1.0)
+	var neck := cyl(0.2, 0.24, 1.9, Vector3(0.0, 2.75, -1.3), hide, 6, c)
+	neck.rotation.x = 0.5
+	var head := sphere(0.3, 0.5, Vector3(0.0, 3.5, -1.85), hide, c)
+	head.scale = Vector3(0.8, 0.8, 1.5)
+	var tail := cyl(0.07, 0.04, 0.9, Vector3(0.0, 2.1, 1.35), hide, 4, c)
+	tail.rotation.x = -0.5
+	## Legs hang from hips so they can swing from the top.
 	for sx in [-0.45, 0.45]:
-		for sz in [-0.85, 0.75]:
-			cyl(0.12, 0.1, 1.9, Vector3(sx, 0.95, sz), hide, 5, c)
+		for sz in [-0.85, 0.8]:
+			var hip := Node3D.new()
+			hip.name = "Leg"
+			c.add_child(hip)
+			hip.position = Vector3(sx, 1.9, sz)
+			cyl(0.13, 0.1, 1.9, Vector3(0.0, -0.95, 0.0), hide, 5, hip)
+	return c
 
 
-func caravan(map: Node, from: Vector2, to: Vector2, n: int) -> void:
+## A camel train plodding nose to tail around a closed route over the dunes.
+## A loop means the line never breaks at a seam. The map ticks it each frame.
+func caravan(map: Node, route: PackedVector2Array, n: int) -> Dictionary:
 	var c := Node3D.new()
 	c.name = "Caravan"
 	root.add_child(c)
-	var dir := (to - from).normalized()
-	var yaw := atan2(dir.x, dir.y) + PI
+	var camels: Array[Node3D] = []
 	for i in n:
-		var t := float(i) / float(maxi(n - 1, 1))
-		var p := from.lerp(to, t) + Vector2(sin(float(i) * 1.7), cos(float(i) * 2.3)) * 2.0
+		camels.append(camel(Vector3.ZERO, 0.0, c))
+	## Cumulative length round the loop, so a camel can be placed by distance.
+	var marks := PackedFloat32Array()
+	var total := 0.0
+	for i in route.size():
+		marks.append(total)
+		total += route[i].distance_to(route[(i + 1) % route.size()])
+	return {"node": c, "camels": camels, "route": route, "marks": marks, "len": total, "dist": 0.0}
+
+
+## Where the route is at `along` metres round the loop.
+func _route_at(train: Dictionary, along: float) -> Vector2:
+	var route: PackedVector2Array = train["route"]
+	var marks: PackedFloat32Array = train["marks"]
+	var total: float = train["len"]
+	var d := fposmod(along, total)
+	for i in range(route.size() - 1, -1, -1):
+		if d >= marks[i]:
+			var a := route[i]
+			var b := route[(i + 1) % route.size()]
+			var seg := a.distance_to(b)
+			return a.lerp(b, clampf((d - marks[i]) / maxf(seg, 0.001), 0.0, 1.0))
+	return route[0]
+
+
+## Walk the train: each camel trails the one ahead by a fixed gap, rises and
+## falls over the dunes, leans with the slope and swings its legs.
+func walk_caravan(train: Dictionary, map: Node, delta: float, speed: float = 1.6) -> void:
+	var dist: float = float(train["dist"]) + speed * delta
+	train["dist"] = dist
+	var camels: Array = train["camels"]
+	for i in camels.size():
+		var along := dist - float(i) * 6.5
+		var p := _route_at(train, along)
+		var ahead := _route_at(train, along + 2.0)
 		var y: float = map.height_at(p.x, p.y)
-		camel(Vector3(p.x, y - 0.2, p.y), yaw + sin(float(i)) * 0.1, c)
+		var y2: float = map.height_at(ahead.x, ahead.y)
+		var step := ahead - p
+		var cam: Node3D = camels[i]
+		cam.position = Vector3(p.x, y - 0.25 + sin(along * 0.9 + float(i)) * 0.05, p.y)
+		cam.rotation = Vector3(-atan2(y2 - y, maxf(step.length(), 0.01)), atan2(step.x, step.y) + PI, 0.0)
+		## Legs swing in diagonal pairs, and the body rocks with the stride.
+		var phase := along * 1.1 + float(i) * 0.7
+		var k := 0
+		for leg in cam.get_children():
+			if leg is Node3D and leg.name.begins_with("Leg"):
+				var swing := sin(phase + (0.0 if k % 3 == 0 else PI))
+				(leg as Node3D).rotation.x = swing * 0.35
+				k += 1
 
 
 ## Khejri: thin trunk, flat spreading crown — the tree of the Thar.

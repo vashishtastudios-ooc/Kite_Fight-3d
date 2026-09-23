@@ -25,7 +25,7 @@ const RIVAL_DECK := 21.0
 const RIVAL_ROOF := Rect2(-44.0, 86.0, 20.0, 22.0)
 ## The town sits behind and beside the rooftops: the sky in front of the
 ## terrace is the kite's, and nothing is built into it.
-const TOWN := Rect2(-80.0, 86.0, 160.0, 130.0)
+const TOWN := Rect2(-105.0, 86.0, 210.0, 215.0)
 ## The fort on its rock, away to the left over the dunes.
 const FORT := Vector2(-230.0, -250.0)
 const FORT_TOP := 66.0
@@ -52,6 +52,7 @@ var _props: PropsSc
 ## {pos: Vector2, r: float, devil: bool, node: Node3D}
 var _thermals: Array[Dictionary] = []
 var _t: float = 0.0
+var _caravan: Dictionary = {}
 
 
 func build() -> void:
@@ -139,6 +140,8 @@ func _process(delta: float) -> void:
 	if _wind and _wind.has_method("wind_dir"):
 		_wind_dir = _wind.wind_dir()
 	_drift_thermals(delta)
+	if not _caravan.is_empty():
+		_props.walk_caravan(_caravan, self, delta)
 
 
 # ── Map contract ─────────────────────────────────────────────────────────────
@@ -236,7 +239,7 @@ func _shelf(x: float, z: float) -> float:
 	var r := sqrt(dx * dx + dz * dz)
 	if r <= 0.0:
 		return SHELF
-	var t := clampf(r / 46.0, 0.0, 1.0)
+	var t := clampf(r / 54.0, 0.0, 1.0)
 	return lerpf(SHELF, 2.5, 1.0 - pow(1.0 - t, 2.0)) + _rough.get_noise_2d(x * 1.4, z * 1.4) * 2.0 * t
 
 
@@ -359,10 +362,13 @@ func _dune_curtain(L: Dictionary) -> void:
 # ── Town and desert props ────────────────────────────────────────────────────
 
 func _build_town() -> void:
-	## The two havelis, then the town behind and around them.
+	## The two havelis, the streets around them, the landmarks that give the
+	## skyline its shape, and the wall that closes the town off behind.
 	_props.haveli(ROOF, SHELF, DECK, true)
 	_props.haveli(RIVAL_ROOF, SHELF, RIVAL_DECK, false)
 	_props.town(TOWN, ROOF, RIVAL_ROOF, SHELF, self)
+	_props.landmarks(TOWN, SHELF, self)
+	_props.town_wall(TOWN, SHELF, self)
 
 
 func _build_desert_props() -> void:
@@ -372,8 +378,13 @@ func _build_desert_props() -> void:
 		var y := height_at(spot.x, spot.y)
 		_props.chhatri(Vector3(spot.x, y - 0.4, spot.y), 1.0 + float(int(spot.x) % 3) * 0.15)
 	_props.stepwell(Vector3(-40.0, height_at(-40.0, -40.0), -40.0))
-	## A camel train plodding along a hollow.
-	_props.caravan(self, Vector2(70.0, 10.0), Vector2(-120.0, -90.0), 6)
+	## A camel train on a long loop over the dunes in front, so it is always
+	## crossing someone's view, skylined on the crests.
+	var route := PackedVector2Array([
+		Vector2(150.0, -30.0), Vector2(40.0, -70.0), Vector2(-70.0, -60.0), Vector2(-170.0, -110.0),
+		Vector2(-200.0, -200.0), Vector2(-90.0, -250.0), Vector2(60.0, -230.0), Vector2(170.0, -150.0),
+	])
+	_caravan = _props.caravan(self, route, 8)
 	## Date palms in loose groves, a few close by to frame the view, and
 	## khejri scrub further out.
 	var rng := RandomNumberGenerator.new()
