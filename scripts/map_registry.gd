@@ -20,11 +20,17 @@ const MAPS := [
 		"image": "res://assets/ui/maps/pahadi.jpg",
 		"size": "wide",
 	},
+	{
+		"id": "registan",
+		"title": "Registan",
+		"mood": "Golden dunes, a fort, thermals off hot sand.",
+		"image": "res://assets/ui/maps/registan.jpg",
+		"size": "wide",
+	},
 ]
 
 ## Teasers for the grid. No image: drawn as a silhouette.
 const COMING := [
-	{"title": "Registan", "mood": "Desert dunes at sundown", "art": "dunes"},
 	{"title": "Tukkal Raat", "mood": "A night of lantern kites", "art": "lanterns"},
 ]
 

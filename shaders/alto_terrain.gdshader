@@ -15,6 +15,8 @@ uniform float snow_h = 150.0;
 // Rock strata (0 = none): soft horizontal bands that wander a little, for
 // cliffs and hoodoos.
 uniform float strata = 0.0;
+// 1 = flat-shaded facets (rock, hills). 0 = smooth (sand dunes).
+uniform float faceted = 1.0;
 
 varying vec3 v_world;
 
@@ -24,11 +26,14 @@ void vertex() {
 
 void fragment() {
 	// Facet normal: every triangle reads as one flat plane.
-	vec3 fn = normalize(cross(dFdx(VERTEX), dFdy(VERTEX)));
-	if (dot(fn, VIEW) < 0.0) {
-		fn = -fn;
+	vec3 fn = NORMAL;
+	if (faceted > 0.5) {
+		fn = normalize(cross(dFdx(VERTEX), dFdy(VERTEX)));
+		if (dot(fn, VIEW) < 0.0) {
+			fn = -fn;
+		}
+		NORMAL = fn;
 	}
-	NORMAL = fn;
 	vec3 wn = normalize((INV_VIEW_MATRIX * vec4(fn, 0.0)).xyz);
 	float steep = 1.0 - clamp(wn.y, 0.0, 1.0);
 	float h = v_world.y;

@@ -3,6 +3,7 @@ extends Node3D
 const WindSys := preload("res://scripts/wind_system.gd")
 const MapBase := preload("res://scripts/map_base.gd")
 const PahadiSc := preload("res://scripts/map_pahadi.gd")
+const RegistanSc := preload("res://scripts/map_registan.gd")
 const MapRegistry := preload("res://scripts/map_registry.gd")
 var _map_id: String = "city"
 var _flyer_id: String = ""
@@ -208,7 +209,10 @@ func _ready() -> void:
 		tcam.environment = player.camera.environment
 		add_child(tcam)
 		var sp := city.spawn_position
-		if thumb == "pahadi":
+		if thumb == "registan":
+			tcam.global_position = sp + Vector3(30.0, 22.0, 40.0)
+			tcam.look_at(sp + Vector3(-30.0, 2.0, -260.0), Vector3.UP)
+		elif thumb == "pahadi":
 			tcam.global_position = sp + Vector3(26.0, 26.0, 46.0)
 			tcam.look_at(sp + Vector3(-10.0, 12.0, -260.0), Vector3.UP)
 		else:
@@ -602,10 +606,10 @@ func _swap_map() -> void:
 	if id == "" and Engine.has_meta("travel_map"):
 		id = str(Engine.get_meta("travel_map"))
 	_map_id = id if MapRegistry.has(id) else "city"
-	if _map_id != "pahadi":
+	if _map_id == "city":
 		return
 	var old := city
-	var m := PahadiSc.new()
+	var m: MapBase = RegistanSc.new() if _map_id == "registan" else PahadiSc.new()
 	add_child(m)
 	move_child(m, old.get_index())
 	remove_child(old)

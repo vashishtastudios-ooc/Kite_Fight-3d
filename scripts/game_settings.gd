@@ -9,9 +9,9 @@ var quality: int = 1
 var fullscreen: bool = false
 var show_hints: bool = true
 var kite_id: String = "saffron"
-## Which map to fly on: "city" (Jaipur rooftops) or "pahadi" (Himalayan dusk).
+## Which map to fly on — see map_registry.gd.
 var map_id: String = "city"
-const MAPS: PackedStringArray = ["city", "pahadi"]
+const MAPS: PackedStringArray = ["city", "pahadi", "registan"]
 var mute: bool = false
 var vol_master: float = 0.85
 var vol_ambience: float = 0.80
