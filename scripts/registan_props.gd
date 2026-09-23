@@ -11,6 +11,7 @@ const CARVE := Color(0.97, 0.84, 0.58)
 const SHADE := Color(0.52, 0.34, 0.26)
 const DOOR := Color(0.36, 0.20, 0.14)
 const TEAL := Color(0.20, 0.52, 0.52)
+const CAMEL_SCENE := preload("res://assets/desert/camel.glb")
 
 
 # ── Haveli ───────────────────────────────────────────────────────────────────
@@ -455,9 +456,24 @@ func shadow_mat() -> StandardMaterial3D:
 	return m
 
 
-## A camel, built so its legs can swing: returns the node with the four legs
-## kept as children for the walk.
+## A camel: the modelled one (assets/desert/camel.glb), whose Body and four
+## Leg_* parts come through as separate nodes, so the legs still swing. Its
+## material is overridden to flat shadow, so it stays a silhouette.
 func camel(pos: Vector3, yaw: float, parent: Node3D) -> Node3D:
+	var c := CAMEL_SCENE.instantiate() as Node3D
+	c.name = "Camel"
+	parent.add_child(c)
+	c.position = pos
+	c.rotation.y = yaw
+	var hide := shadow_mat()
+	for m in c.find_children("*", "MeshInstance3D", true, false):
+		(m as MeshInstance3D).material_override = hide
+		(m as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return c
+
+
+## The old blocked-out camel, kept for reference if the model is missing.
+func _camel_blockout(pos: Vector3, yaw: float, parent: Node3D) -> Node3D:
 	var c := Node3D.new()
 	c.name = "Camel"
 	parent.add_child(c)
@@ -537,11 +553,11 @@ func walk_caravan(train: Dictionary, map: Node, delta: float, speed: float = 1.6
 		## Legs swing in diagonal pairs, and the body rocks with the stride.
 		var phase := along * 1.1 + float(i) * 0.7
 		var k := 0
-		for leg in cam.get_children():
-			if leg is Node3D and leg.name.begins_with("Leg"):
-				var swing := sin(phase + (0.0 if k % 3 == 0 else PI))
-				(leg as Node3D).rotation.x = swing * 0.35
-				k += 1
+		for leg in cam.find_children("Leg*", "Node3D", true, false):
+			## Diagonal pairs swing together, as a walking camel does.
+			var swing := sin(phase + (0.0 if k % 3 == 0 else PI))
+			(leg as Node3D).rotation.x = swing * 0.32
+			k += 1
 
 
 ## Khejri: thin trunk, flat spreading crown — the tree of the Thar.
