@@ -9,6 +9,9 @@ var quality: int = 1
 var fullscreen: bool = false
 var show_hints: bool = true
 var kite_id: String = "saffron"
+## Which map to fly on: "city" (Jaipur rooftops) or "pahadi" (Himalayan dusk).
+var map_id: String = "city"
+const MAPS: PackedStringArray = ["city", "pahadi"]
 var mute: bool = false
 var vol_master: float = 0.85
 var vol_ambience: float = 0.80
@@ -23,6 +26,9 @@ func load_from_disk() -> void:
 	fullscreen = bool(cfg.get_value("video", "fullscreen", false))
 	show_hints = bool(cfg.get_value("ui", "hints", true))
 	kite_id = KiteSkins.clamp_id(str(cfg.get_value("play", "kite", "saffron")))
+	map_id = str(cfg.get_value("play", "map", "city"))
+	if not MAPS.has(map_id):
+		map_id = "city"
 	mute = bool(cfg.get_value("audio", "mute", false))
 	vol_master = clampf(float(cfg.get_value("audio", "master", 0.85)), 0.0, 1.0)
 	vol_ambience = clampf(float(cfg.get_value("audio", "ambience", 0.80)), 0.0, 1.0)
@@ -35,6 +41,7 @@ func save_to_disk() -> void:
 	cfg.set_value("video", "fullscreen", fullscreen)
 	cfg.set_value("ui", "hints", show_hints)
 	cfg.set_value("play", "kite", kite_id)
+	cfg.set_value("play", "map", map_id)
 	cfg.set_value("audio", "mute", mute)
 	cfg.set_value("audio", "master", vol_master)
 	cfg.set_value("audio", "ambience", vol_ambience)

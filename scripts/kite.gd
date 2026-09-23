@@ -89,7 +89,7 @@ var _steer_heading: float = 0.0
 var _line_mid: Vector3 = Vector3.ZERO
 
 const WindSys := preload("res://scripts/wind_system.gd")
-const CityGen := preload("res://scripts/city_generator.gd")
+const MapBase := preload("res://scripts/map_base.gd")
 
 var phase: Phase = Phase.GROUNDED
 var velocity: Vector3 = Vector3.ZERO
@@ -106,6 +106,8 @@ var is_ai: bool = false
 ## The other flyer's kite (AI or online). Paper kites carry no outline, except
 ## the rival's, which keeps a faint rim once it is far off so you can find it.
 var is_rival: bool = false
+## Upward air the map is giving the kite right now (ridge lift), m/s.
+var lift_now: float = 0.0
 var sail_id: String = KiteSkins.SAFFRON
 var viewer_pos: Vector3 = Vector3.ZERO
 var _eye: Vector3 = Vector3.ZERO
@@ -114,7 +116,7 @@ var hand_pos: Vector3 = Vector3.ZERO
 var payout_rate: float = 0.0
 
 var wind: WindSys
-var city: CityGen
+var city: MapBase
 
 var _kheench: bool = false
 var _dheel: bool = false
@@ -163,7 +165,7 @@ const TRAIL_LIFE := 0.58
 const TRAIL_MAX := 44
 
 
-func setup(wind_in: WindSys, city_in: CityGen, colors: Array[Color] = [], skin: String = "") -> void:
+func setup(wind_in: WindSys, city_in: MapBase, colors: Array[Color] = [], skin: String = "") -> void:
 	wind = wind_in
 	city = city_in
 	sail_id = KiteSkins.clamp_id(skin) if skin != "" else KiteSkins.SAFFRON
@@ -540,6 +542,12 @@ func tick(delta: float, hand: Vector3, viewer: Vector3, reel: float, bias: float
 		_wheel = move_toward(_wheel, 0.0, delta * 4.0)
 	_update_wheel_audio()
 
+	## Ridge lift: wind blowing up a slope carries the kite up with it.
+	lift_now = city.lift_at(global_position) if city else 0.0
+	if lift_now > 0.0:
+		global_position.y += lift_now * delta
+		if velocity.y < 0.0:
+			velocity.y = move_toward(velocity.y, 0.0, lift_now * 2.0 * delta)
 	_constrain_line(delta)
 	if _dheel and phase != Phase.CUT and phase != Phase.CRASHED:
 		var paid_dist := global_position.distance_to(hand_pos)
@@ -854,13 +862,8 @@ func _check_crash() -> void:
 		return
 	if city == null:
 		return
-	var p := global_position
-	for aabb in city.building_aabbs:
-		if aabb.grow(0.3).has_point(p):
-			if aabb.intersects(city.player_building_aabb) and p.y >= city.rooftop_height - 0.2:
-				continue
-			_crash()
-			return
+	if city.is_solid(global_position):
+		_crash()
 
 
 func _crash() -> void:

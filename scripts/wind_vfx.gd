@@ -205,6 +205,10 @@ func _build_streaks() -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.vertex_color_use_as_albedo = true
 	mat.disable_fog = true
+	## A streak passing right by the lens would read as a white bar: fade it.
+	mat.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
+	mat.distance_fade_min_distance = 2.5
+	mat.distance_fade_max_distance = 9.0
 	mesh.material = mat
 	_streaks.draw_pass_1 = mesh
 	_streaks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF

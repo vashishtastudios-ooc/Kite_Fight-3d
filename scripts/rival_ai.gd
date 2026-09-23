@@ -160,6 +160,17 @@ func _sweep_goal() -> Vector3:
 	across = across.normalized()
 	var goal := on_theirs + through * SWEEP_PAST + across * SWEEP_WIDE * _side
 	goal.y = maxf(goal.y, hand.y + MIN_ALT)
+	## A kite can only hold the sky downwind of its flyer. If the goal is too
+	## far round to the side, push it downwind until it is within ~50°.
+	var w: Node = pech.wind if pech else null
+	var wd: Vector3 = w.wind_dir() if w else Vector3(0.0, 0.0, -1.0)
+	var rel := goal - hand
+	rel.y = 0.0
+	var fwd := rel.dot(wd)
+	var lateral := (rel - wd * fwd).length()
+	var need := lateral * 0.85
+	if fwd < need:
+		goal += wd * (need - fwd)
 	return goal
 
 

@@ -1,5 +1,5 @@
 class_name CityGenerator
-extends Node3D
+extends "res://scripts/map_base.gd"
 
 ## Stylized city: 3D building kits around a dressed patang terrace.
 
@@ -29,12 +29,8 @@ const PLOT := 20.0
 ## Only the terrace and next-door roofs cast. Mid/far kits stay lit and colorful.
 const SHADOW_RADIUS := 42.0
 
-var spawn_position: Vector3 = Vector3(0.0, 20.3, 92.0)
-var rooftop_height: float = 20.0
-var rooftop_bounds: Rect2 = Rect2(-6.5, 86.0, 13.0, 13.0)
-var building_aabbs: Array[AABB] = []
-var player_building_aabb: AABB
-var rocket_pads: Array[Vector3] = []
+## spawn_position, rooftop_height, rooftop_bounds, building_aabbs,
+## player_building_aabb and rocket_pads come from map_base.gd.
 var palace_aabb: AABB
 var rival_roof_aabb: AABB
 

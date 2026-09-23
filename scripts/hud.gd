@@ -11,6 +11,8 @@ const SettingsSc := preload("res://scripts/game_settings.gd")
 const PauseSc := preload("res://scripts/pause_menu.gd")
 const KiteSkins := preload("res://scripts/kite_skins.gd")
 const Brand := preload("res://scripts/brand.gd")
+const MapRegistry := preload("res://scripts/map_registry.gd")
+const MapTileSc := preload("res://scripts/map_tile.gd")
 const TitleCardSc := preload("res://scripts/title_card.gd")
 const TitleMarkSc := preload("res://scripts/title_mark.gd")
 const ProfileSc := preload("res://scripts/profile.gd")
@@ -18,6 +20,7 @@ const ProfileCardSc := preload("res://scripts/profile_card.gd")
 
 signal character_chosen(id: String)
 signal mode_chosen(id: String)
+signal map_chosen(id: String)
 signal online_host
 signal online_join(code: String)
 signal title_requested
@@ -78,6 +81,14 @@ var _kite_cards: Array[Button] = []
 var _char_row: HBoxContainer
 var _char_label: Label
 var _mode_row: HBoxContainer
+var _map_row: HBoxContainer
+var _map_label: Label
+var _map_tiles: Array = []
+var _travel: Control
+## The map this evening is on (the picker marks it), and whether the map step
+## was already taken (after travelling, the flyer lands straight on modes).
+var current_map_id: String = "city"
+var skip_map_step: bool = false
 var _mode_label: Label
 var _net_row: HBoxContainer
 var _net_status: Label
@@ -526,6 +537,19 @@ func _build_intro(root: Control) -> void:
 		Color(0.82, 0.18, 0.22),
 	]))
 
+	_map_label = Label.new()
+	_map_label.text = "Choose where to fly"
+	_map_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_map_label.add_theme_font_override("font", Brand.body_font())
+	_map_label.add_theme_font_size_override("font_size", 22)
+	_map_label.add_theme_color_override("font_color", Brand.GOLD)
+	_shadow(_map_label)
+	_map_label.visible = false
+	box.add_child(_map_label)
+	_map_row = _build_map_grid()
+	_map_row.visible = false
+	box.add_child(_map_row)
+
 	_mode_label = Label.new()
 	_mode_label.text = "Choose a mode"
 	_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -729,6 +753,10 @@ func show_character_select() -> void:
 		_mode_row.visible = false
 	if _mode_label:
 		_mode_label.visible = false
+	if _map_row:
+		_map_row.visible = false
+	if _map_label:
+		_map_label.visible = false
 	if _net_row:
 		_net_row.visible = false
 	if _intro_prompt:
@@ -940,6 +968,33 @@ func _pick_character(id: String) -> void:
 		_char_row.visible = false
 	if _char_label:
 		_char_label.visible = false
+	if not skip_map_step:
+		show_map_select()
+		return
+	show_mode_select()
+
+
+## Who -> Where -> How: the bento grid of maps.
+func show_map_select() -> void:
+	for t in _map_tiles:
+		t.set_selected(t.map_id == current_map_id)
+	if _map_row:
+		_map_row.visible = true
+	if _map_label:
+		_map_label.visible = true
+	if _mode_row:
+		_mode_row.visible = false
+	if _mode_label:
+		_mode_label.visible = false
+	if _intro_prompt:
+		_intro_prompt.visible = false
+
+
+func show_mode_select() -> void:
+	if _map_row:
+		_map_row.visible = false
+	if _map_label:
+		_map_label.visible = false
 	if _mode_row:
 		_mode_row.visible = true
 	if _mode_label:
@@ -1225,7 +1280,11 @@ func _update_wind_card(delta: float) -> void:
 	var g := _gust_here()
 	_wind_speed.text = "%d" % int(round(wind.last_speed * 3.6))
 	var t := Time.get_ticks_msec() * 0.001
-	if g > 0.15:
+	if kite and kite.lift_now > 1.2 and g <= 0.15:
+		## Riding ridge lift (mountain maps).
+		_wind_chip.text = "LIFT ↑"
+		_wind_chip.modulate = Color(0.62, 0.92, 1.0, 1.0)
+	elif g > 0.15:
 		_wind_chip.text = "GUST!"
 		_wind_chip.modulate = Color(1.0, 0.92, 0.45, 1.0)
 		_wind_chip.scale = Vector2.ONE
@@ -1295,3 +1354,92 @@ func _draw_wind_dial() -> void:
 		## The front on its way: a pulsing sliver creeping in from the right.
 		var w := bw * 0.35 * incoming
 		_wind_dial.draw_rect(Rect2(bx + bw - w, by, w, 5), Color(1.0, 0.62, 0.22, 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.012)))
+
+
+## Bento grid: each real map a wide picture card, coming-soon teasers stacked
+## in a narrow column at the end. Grows with MapRegistry.
+func _build_map_grid() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
+	row.mouse_filter = Control.MOUSE_FILTER_STOP
+	var big := Vector2(330, 196)
+	for m in MapRegistry.MAPS:
+		var tile := MapTileSc.new()
+		tile.setup(m, big if m.get("size", "wide") == "wide" else Vector2(196, 196))
+		var id: String = m["id"]
+		tile.pressed.connect(func() -> void: _pick_map(id))
+		row.add_child(tile)
+		_map_tiles.append(tile)
+	if not MapRegistry.COMING.is_empty():
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 12)
+		col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var n := MapRegistry.COMING.size()
+		var h := (big.y - 12.0 * float(n - 1)) / float(n)
+		for c in MapRegistry.COMING:
+			var tile := MapTileSc.new()
+			tile.setup(c, Vector2(186, h), true)
+			col.add_child(tile)
+		row.add_child(col)
+	return row
+
+
+func _pick_map(id: String) -> void:
+	for t in _map_tiles:
+		t.set_selected(t.map_id == id)
+	map_chosen.emit(id)
+
+
+## Full-screen card for the trip to another map: its picture, its name.
+func show_travel(id: String) -> void:
+	var m := MapRegistry.find(id)
+	if _travel:
+		_travel.queue_free()
+	_travel = Control.new()
+	_travel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_travel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_travel.modulate.a = 0.0
+	add_child(_travel)
+	var bg := ColorRect.new()
+	bg.color = Color(0.03, 0.02, 0.04)
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_travel.add_child(bg)
+	var img := TextureRect.new()
+	img.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	img.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	img.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	var path := str(m.get("image", ""))
+	if path != "" and ResourceLoader.exists(path):
+		img.texture = load(path)
+	_travel.add_child(img)
+	var shade := ColorRect.new()
+	shade.color = Color(0.04, 0.02, 0.05, 0.35)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_travel.add_child(shade)
+	var title := _make_label(_travel, Vector2.ZERO, 64)
+	title.text = str(m.get("title", ""))
+	title.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	title.offset_left = -400.0
+	title.offset_right = 400.0
+	title.offset_top = -60.0
+	title.offset_bottom = 20.0
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_override("font", Brand.display_font())
+	title.add_theme_color_override("font_color", Brand.CREAM)
+	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
+	title.add_theme_constant_override("shadow_offset_y", 3)
+	var sub := _make_label(_travel, Vector2.ZERO, 20)
+	sub.text = "Travelling…"
+	sub.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	sub.offset_left = -300.0
+	sub.offset_right = 300.0
+	sub.offset_top = 26.0
+	sub.offset_bottom = 60.0
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.add_theme_color_override("font_color", Brand.GOLD)
+	var tw := create_tween()
+	tw.tween_property(_travel, "modulate:a", 1.0, 0.45)
+	var pulse := create_tween().set_loops()
+	pulse.tween_property(sub, "modulate:a", 0.4, 0.6)
+	pulse.tween_property(sub, "modulate:a", 1.0, 0.6)

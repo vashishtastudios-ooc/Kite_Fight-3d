@@ -1,7 +1,11 @@
 extends Node3D
 
 const WindSys := preload("res://scripts/wind_system.gd")
-const CityGen := preload("res://scripts/city_generator.gd")
+const MapBase := preload("res://scripts/map_base.gd")
+const PahadiSc := preload("res://scripts/map_pahadi.gd")
+const MapRegistry := preload("res://scripts/map_registry.gd")
+var _map_id: String = "city"
+var _flyer_id: String = ""
 const PlayerSc := preload("res://scripts/player.gd")
 const KiteSc := preload("res://scripts/kite.gd")
 const HudSc := preload("res://scripts/hud.gd")
@@ -19,7 +23,7 @@ const NetRoomSc := preload("res://scripts/net_room.gd")
 @onready var world_env: WorldEnvironment = $WorldEnvironment
 @onready var sun: DirectionalLight3D = $Sun
 @onready var wind: WindSys = $WindSystem
-@onready var city: CityGen = $City
+@onready var city: MapBase = $City
 @onready var player: PlayerSc = $Player
 @onready var kite: KiteSc = $Kite
 @onready var hud: HudSc = $HUD
@@ -69,8 +73,10 @@ const BODY_GIRL := preload("res://assets/people/stylized+female+3d+newmodel.glb"
 
 func _ready() -> void:
 	_bind_input()
+	_swap_map()
 	_configure_world()
 	city.build()
+	city.configure_world(world_env.environment, sun)
 	## Point the sea's sun-glint at the actual sun so the golden path lines up.
 	city.set_water_sun(-sun.global_transform.basis.z)
 	wind.rooftop_height = city.rooftop_height
@@ -122,6 +128,14 @@ func _ready() -> void:
 	hud.setup(wind, kite, rival, pech)
 	hud.character_chosen.connect(_on_character_chosen)
 	hud.mode_chosen.connect(_on_mode_chosen)
+	hud.map_chosen.connect(_on_map_chosen)
+	hud.current_map_id = _map_id
+	## Arrived from the map grid: skip the opening and land on mode select
+	## with the same flyer.
+	if Engine.has_meta("travel_flyer"):
+		var flyer := str(Engine.get_meta("travel_flyer"))
+		Engine.remove_meta("travel_flyer")
+		call_deferred("_land_after_travel", flyer)
 	hud.online_host.connect(_on_online_host)
 	hud.online_join.connect(_on_online_join)
 	hud.title_requested.connect(_return_to_title)
@@ -136,6 +150,8 @@ func _ready() -> void:
 	_net.gone.connect(_on_net_gone)
 	_net.fail.connect(_on_net_fail)
 	wind.origin = city.spawn_position
+	if city.has_method("set_wind"):
+		city.set_wind(wind)
 	if pech:
 		pech.wind = wind
 		pech.kaata.connect(_on_match_kaata)
@@ -179,6 +195,32 @@ func _ready() -> void:
 	if hud:
 		hud.set_letterbox(true, "Jaipur dusk. One roof. Two strings.", "SPACE  skip")
 	print("Kite Battle 3d rooftop ready. Play-area buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
+	## Dev: capture a map card image into assets/ui/maps (THUMB_SHOT=<map id>,
+	## run windowed with KITE_MAP set to the same id). Re-run when a map changes.
+	var thumb := OS.get_environment("THUMB_SHOT")
+	if thumb != "":
+		hud.visible = false
+		if _title_kite:
+			_title_kite.visible = false
+		var tcam := Camera3D.new()
+		tcam.fov = 58.0
+		tcam.far = 2600.0
+		tcam.environment = player.camera.environment
+		add_child(tcam)
+		var sp := city.spawn_position
+		if thumb == "pahadi":
+			tcam.global_position = sp + Vector3(26.0, 26.0, 46.0)
+			tcam.look_at(sp + Vector3(-10.0, 12.0, -260.0), Vector3.UP)
+		else:
+			tcam.global_position = sp + Vector3(18.0, 34.0, 40.0)
+			tcam.look_at(sp + Vector3(-6.0, 10.0, -300.0), Vector3.UP)
+		tcam.current = true
+		get_tree().create_timer(4.0).timeout.connect(func() -> void:
+			var img := get_viewport().get_texture().get_image()
+			img.resize(960, 540, Image.INTERPOLATE_LANCZOS)
+			img.save_jpg("res://assets/ui/maps/%s.jpg" % thumb, 0.88)
+			print("thumb saved ", thumb)
+			get_tree().quit())
 
 
 func _setup_kite_cams() -> void:
@@ -551,6 +593,27 @@ func _snap_camera_to_sky() -> void:
 	player.look_pitch = clampf(atan2(to.y, Vector3(to.x, 0.0, to.z).length()), deg_to_rad(-80.0), deg_to_rad(75.0))
 
 
+## The City node in the scene is the Jaipur map — the opening always plays
+## there. Picking another map in the grid reloads the scene with the choice
+## kept on Engine meta, and that map replaces the city before anything is
+## built. KITE_MAP overrides (dev).
+func _swap_map() -> void:
+	var id := OS.get_environment("KITE_MAP")
+	if id == "" and Engine.has_meta("travel_map"):
+		id = str(Engine.get_meta("travel_map"))
+	_map_id = id if MapRegistry.has(id) else "city"
+	if _map_id != "pahadi":
+		return
+	var old := city
+	var m := PahadiSc.new()
+	add_child(m)
+	move_child(m, old.get_index())
+	remove_child(old)
+	old.queue_free()
+	m.name = "City"
+	city = m
+
+
 func _configure_world() -> void:
 	## Dusk, not night: sun ~10° up, warmer and dimmer than late afternoon.
 	sun.rotation_degrees = Vector3(-10.0, 122.0, 0.0)
@@ -785,6 +848,7 @@ func _on_character_chosen(id: String) -> void:
 	if _character_picked:
 		return
 	_character_picked = true
+	_flyer_id = id
 	if _profile:
 		_profile.flyer_id = id
 		_profile.save_to_disk()
@@ -798,6 +862,30 @@ func _on_character_chosen(id: String) -> void:
 		_preview_girl.queue_free()
 		_preview_girl = null
 	_spawn_terrace_mate("girl" if id == "boy" else "boy")
+
+
+## A map card was picked. Same map: straight on to modes. Another map: the
+## travel card, then reload onto it keeping the flyer.
+func _on_map_chosen(id: String) -> void:
+	if not MapRegistry.has(id):
+		return
+	if id == _map_id:
+		hud.show_mode_select()
+		return
+	hud.show_travel(id)
+	var t := get_tree().create_timer(0.9)
+	t.timeout.connect(func() -> void:
+		Engine.set_meta("travel_map", id)
+		Engine.set_meta("travel_flyer", _flyer_id if _flyer_id != "" else "boy")
+		get_tree().paused = false
+		get_tree().reload_current_scene())
+
+
+func _land_after_travel(flyer: String) -> void:
+	_skip_intro_cam()
+	_finish_intro_cam()
+	hud.skip_map_step = true
+	hud._pick_character(flyer)
 
 
 func _on_mode_chosen(id: String) -> void:

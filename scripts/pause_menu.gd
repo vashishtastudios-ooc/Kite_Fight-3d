@@ -308,6 +308,7 @@ func _build() -> void:
 	q_row.add_child(_quality)
 	set_col.add_child(q_row)
 
+
 	_full = CheckButton.new()
 	_full.text = "Fullscreen"
 	_full.toggled.connect(_on_full)
