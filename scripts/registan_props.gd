@@ -224,6 +224,12 @@ func town(area: Rect2, keep_a: Rect2, keep_b: Rect2, ground_y: float, map: Node)
 			if g < ground_y - 3.0:
 				z += step
 				continue
+			## Thin the outskirts so the town frays into the sand rather than
+			## ending on a ruled line.
+			var edge := minf(minf(jx - area.position.x, area.end.x - jx), minf(jz - area.position.y, area.end.y - jz))
+			if edge < 40.0 and rng.randf() > clampf(edge / 40.0, 0.12, 1.0):
+				z += step
+				continue
 			## Detail only where it can be seen: the far streets are plain.
 			var plain := jz > keep_a.end.y + 70.0
 			var w := rng.randf_range(6.0, 12.5)
@@ -323,10 +329,13 @@ func landmarks(area: Rect2, ground_y: float, map: Node) -> void:
 func town_wall(area: Rect2, ground_y: float, map: Node) -> void:
 	var m := mat(SAND)
 	var lit := mat(SAND_LIT)
+	## Only the far half is walled: the streets around the rooftops stay open,
+	## and turning round shows town, not a parapet in your face.
+	var back := lerpf(area.position.y, area.end.y, 0.55)
 	var corners := [
-		[Vector2(area.position.x + 4.0, area.position.y + 30.0), Vector2(area.position.x + 4.0, area.end.y - 4.0)],
+		[Vector2(area.position.x + 4.0, back), Vector2(area.position.x + 4.0, area.end.y - 4.0)],
 		[Vector2(area.position.x + 4.0, area.end.y - 4.0), Vector2(area.end.x - 4.0, area.end.y - 4.0)],
-		[Vector2(area.end.x - 4.0, area.end.y - 4.0), Vector2(area.end.x - 4.0, area.position.y + 30.0)],
+		[Vector2(area.end.x - 4.0, area.end.y - 4.0), Vector2(area.end.x - 4.0, back)],
 	]
 	for run in corners:
 		var a: Vector2 = run[0]

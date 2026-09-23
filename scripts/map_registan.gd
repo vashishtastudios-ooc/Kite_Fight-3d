@@ -31,8 +31,10 @@ const FORT := Vector2(-230.0, -250.0)
 const FORT_TOP := 66.0
 const FORT_R := Vector2(78.0, 56.0)
 
-const GRID_MIN := Vector2(-520.0, -620.0)
-const GRID_MAX := Vector2(520.0, 340.0)
+## The dune field wraps the town on every side, so the world never ends
+## behind the flyer.
+const GRID_MIN := Vector2(-560.0, -640.0)
+const GRID_MAX := Vector2(560.0, 560.0)
 const GRID_STEP := 7.0
 
 ## Thermals.
@@ -317,9 +319,9 @@ func _dune_curtain(L: Dictionary) -> void:
 	var smooth: float = L["smooth"]
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var segs := 200
-	var a0 := deg_to_rad(-135.0)
-	var a1 := deg_to_rad(135.0)
+	var segs := 280
+	var a0 := deg_to_rad(-180.0)
+	var a1 := deg_to_rad(180.0)
 	var prev_b := Vector3.ZERO
 	var prev_t := Vector3.ZERO
 	for i in segs + 1:
@@ -374,7 +376,7 @@ func _build_town() -> void:
 func _build_desert_props() -> void:
 	_props.fort(Vector3(FORT.x, FORT_TOP, FORT.y), FORT_R)
 	## Chhatri pavilions on dune crests, and a ruined stepwell in the sand.
-	for spot in [Vector2(52.0, -60.0), Vector2(-86.0, -140.0), Vector2(120.0, -230.0)]:
+	for spot in [Vector2(52.0, -60.0), Vector2(-86.0, -140.0), Vector2(120.0, -230.0), Vector2(-150.0, 330.0), Vector2(190.0, 250.0), Vector2(40.0, 420.0)]:
 		var y := height_at(spot.x, spot.y)
 		_props.chhatri(Vector3(spot.x, y - 0.4, spot.y), 1.0 + float(int(spot.x) % 3) * 0.15)
 	_props.stepwell(Vector3(-40.0, height_at(-40.0, -40.0), -40.0))
@@ -389,7 +391,11 @@ func _build_desert_props() -> void:
 	## khejri scrub further out.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 4242
-	var groves := [Vector2(34.0, 34.0), Vector2(-52.0, 18.0), Vector2(62.0, -36.0), Vector2(-74.0, -64.0), Vector2(18.0, -120.0), Vector2(-120.0, -150.0)]
+	var groves := [
+		Vector2(34.0, 34.0), Vector2(-52.0, 18.0), Vector2(62.0, -36.0), Vector2(-74.0, -64.0),
+		Vector2(18.0, -120.0), Vector2(-120.0, -150.0),
+		Vector2(-130.0, 330.0), Vector2(150.0, 300.0), Vector2(30.0, 400.0), Vector2(-210.0, 180.0), Vector2(230.0, 120.0),
+	]
 	for gc in groves:
 		var n := rng.randi_range(3, 7)
 		for i in n:
@@ -403,9 +409,9 @@ func _build_desert_props() -> void:
 		var px: float = HOME.x + sx * 28.0
 		var pz := HOME.y + 2.0
 		_props.palm(Vector3(px, height_at(px, pz) - 0.3, pz), rng, 1.5)
-	for i in 26:
-		var x := rng.randf_range(-340.0, 340.0)
-		var z := rng.randf_range(-420.0, 240.0)
+	for i in 60:
+		var x := rng.randf_range(-420.0, 420.0)
+		var z := rng.randf_range(-460.0, 480.0)
 		var h := height_at(x, z)
 		if h > 12.0 or TOWN.grow(12.0).has_point(Vector2(x, z)):
 			continue
