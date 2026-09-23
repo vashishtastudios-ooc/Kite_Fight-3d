@@ -4,16 +4,16 @@ shader_type spatial;
 // and faint wind ripples running across the slopes.
 render_mode diffuse_toon, specular_disabled;
 
-uniform vec3 lit_col : source_color = vec3(0.97, 0.76, 0.40);
-uniform vec3 shade_col : source_color = vec3(0.56, 0.33, 0.27);
-uniform vec3 crest_col : source_color = vec3(1.0, 0.93, 0.72);
-uniform vec3 hollow_col : source_color = vec3(0.45, 0.25, 0.24);
+uniform vec3 lit_col : source_color = vec3(0.95, 0.58, 0.28);
+uniform vec3 shade_col : source_color = vec3(0.30, 0.13, 0.14);
+uniform vec3 crest_col : source_color = vec3(1.0, 0.86, 0.52);
+uniform vec3 hollow_col : source_color = vec3(0.20, 0.09, 0.11);
 uniform float hollow_y = 6.0;      // sand below this sits in shadowed hollows
 uniform float crest_sharp = 14.0;  // how tight the lit crest line is
 uniform float ripple = 0.5;
 uniform vec3 sun_dir = vec3(-0.5, 0.2, -0.85);
-uniform vec3 rock_col : source_color = vec3(0.60, 0.40, 0.30);
-uniform vec3 rock_lit : source_color = vec3(0.78, 0.56, 0.38);
+uniform vec3 rock_col : source_color = vec3(0.30, 0.15, 0.14);
+uniform vec3 rock_lit : source_color = vec3(0.62, 0.34, 0.22);
 
 varying vec3 v_world;
 
@@ -30,7 +30,8 @@ void fragment() {
 	// Crest: where the surface turns over, the sand edge burns bright.
 	float flat_top = smoothstep(0.55, 0.995, wn.y);
 	float turn = clamp(length(vec2(dFdx(wn.y), dFdy(wn.y))) * crest_sharp, 0.0, 1.0);
-	col = mix(col, crest_col, turn * (0.35 + 0.65 * smoothstep(-0.2, 0.8, facing)));
+	// Backlit crest: the sand edge between you and the sun burns brightest.
+	col = mix(col, crest_col, turn * (0.25 + 0.95 * smoothstep(-0.2, 0.9, facing)));
 	// Where the ground stands too steep to hold sand, it is bare rock, laid
 	// in courses and lit harder on the sunward side.
 	float steep = smoothstep(0.88, 0.52, wn.y);

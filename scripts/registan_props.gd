@@ -420,13 +420,15 @@ func dust_devil(base: Vector3, r: float, gentle: bool = false) -> Node3D:
 	sct.curve = sc
 	pm.scale_curve = sct
 	var g := Gradient.new()
-	var strong := 0.5 if gentle else 0.8
+	var strong := 0.42 if gentle else 0.7
 	g.offsets = PackedFloat32Array([0.0, 0.18, 0.7, 1.0])
+	## Dust, not steam: warm and dim, so it never flashes white against the
+	## dark backlit sand.
 	g.colors = PackedColorArray([
-		Color(0.80, 0.56, 0.32, 0.0),
-		Color(0.78, 0.54, 0.30, 0.34 * strong),
-		Color(0.74, 0.50, 0.30, 0.20 * strong),
-		Color(0.72, 0.48, 0.30, 0.0),
+		Color(0.62, 0.36, 0.22, 0.0),
+		Color(0.58, 0.32, 0.20, 0.34 * strong),
+		Color(0.52, 0.28, 0.18, 0.20 * strong),
+		Color(0.48, 0.26, 0.18, 0.0),
 	])
 	var gt := GradientTexture1D.new()
 	gt.gradient = g
@@ -452,3 +454,123 @@ func dust_devil(base: Vector3, r: float, gentle: bool = false) -> Node3D:
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	d.add_child(p)
 	return d
+
+
+## A date palm: a leaning, ringed trunk and a crown of long drooping fronds.
+## Against a low sun these read as pure silhouette, which is the whole point.
+func palm(feet: Vector3, rng: RandomNumberGenerator, scale: float = 1.0) -> Node3D:
+	var t := Node3D.new()
+	t.name = "Palm"
+	root.add_child(t)
+	t.position = feet
+	t.rotation.y = rng.randf() * TAU
+	var dark := mat(Color(0.14, 0.07, 0.07))
+	var tall := rng.randf_range(7.0, 12.0) * scale
+	var lean := rng.randf_range(-0.16, 0.16)
+	var segs := 9
+	var pos := Vector3.ZERO
+	var r0 := 0.34 * scale
+	for i in segs:
+		var f := float(i) / float(segs)
+		var seg_h := tall / float(segs)
+		var r := lerpf(r0, r0 * 0.55, f)
+		## Each drum steps a little sideways, so the trunk curves.
+		pos += Vector3(sin(f * 3.0) * lean * seg_h, seg_h, cos(f * 2.0) * lean * seg_h * 0.5)
+		var drum := cyl(r, r * 0.95, seg_h * 1.06, pos - Vector3(0.0, seg_h * 0.5, 0.0), dark, 7, t)
+		drum.rotation.y = f * 1.4
+	## Crown: fronds springing from the top, arching over and drooping.
+	var crown := pos
+	var n := rng.randi_range(8, 11)
+	for i in n:
+		var a := TAU * float(i) / float(n) + rng.randf_range(-0.12, 0.12)
+		var droop := rng.randf_range(0.5, 1.0)
+		var len := rng.randf_range(2.6, 4.2) * scale
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var steps := 6
+		var prev_l := Vector3.ZERO
+		var prev_r := Vector3.ZERO
+		for k in steps + 1:
+			var f := float(k) / float(steps)
+			## Arch up, then fall away.
+			var y := sin(f * PI * 0.55) * len * 0.42 - pow(f, 2.2) * len * droop * 0.55
+			var out := f * len
+			var wide := sin(f * PI) * 0.34 * scale + 0.04
+			var mid := Vector3(cos(a) * out, y, sin(a) * out)
+			var side := Vector3(-sin(a), 0.0, cos(a)) * wide
+			var l := mid + side
+			var r := mid - side
+			if k > 0:
+				for v in [prev_l, prev_r, r, prev_l, r, l]:
+					st.add_vertex(v)
+			prev_l = l
+			prev_r = r
+		st.generate_normals()
+		var frond := MeshInstance3D.new()
+		frond.mesh = st.commit()
+		var fm := dark.duplicate() as StandardMaterial3D
+		fm.cull_mode = BaseMaterial3D.CULL_DISABLED
+		frond.material_override = fm
+		t.add_child(frond)
+		frond.position = crown
+	## A cluster of dates under the crown.
+	for i in 3:
+		var a := TAU * float(i) / 3.0
+		sphere(0.3 * scale, 0.5 * scale, crown + Vector3(cos(a) * 0.5, -0.5, sin(a) * 0.5) * scale, dark, t)
+	return t
+
+
+## Motes of light drifting over the sand at sundown — dust catching the sun.
+func motes(center: Vector3) -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = "Motes"
+	p.amount = 90
+	p.lifetime = 11.0
+	p.preprocess = 6.0
+	p.local_coords = false
+	p.visibility_aabb = AABB(Vector3(-160, -40, -200), Vector3(320, 120, 400))
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(130.0, 22.0, 150.0)
+	pm.direction = Vector3(0.0, 0.3, -1.0)
+	pm.spread = 25.0
+	pm.initial_velocity_min = 0.8
+	pm.initial_velocity_max = 2.6
+	pm.gravity = Vector3(0.0, 0.25, 0.0)
+	pm.scale_min = 0.5
+	pm.scale_max = 1.4
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array([0.0, 0.3, 0.75, 1.0])
+	g.colors = PackedColorArray([
+		Color(1.0, 0.82, 0.45, 0.0),
+		Color(1.0, 0.86, 0.52, 0.85),
+		Color(1.0, 0.78, 0.40, 0.55),
+		Color(1.0, 0.72, 0.36, 0.0),
+	])
+	var gt := GradientTexture1D.new()
+	gt.gradient = g
+	pm.color_ramp = gt
+	p.process_material = pm
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.5, 0.5)
+	var qm := StandardMaterial3D.new()
+	qm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	qm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	qm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	qm.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	qm.vertex_color_use_as_albedo = true
+	qm.disable_fog = true
+	var soft := GradientTexture2D.new()
+	soft.fill = GradientTexture2D.FILL_RADIAL
+	soft.fill_from = Vector2(0.5, 0.5)
+	soft.fill_to = Vector2(1.0, 0.5)
+	var sg := Gradient.new()
+	sg.colors = PackedColorArray([Color(1, 1, 1, 1), Color(1, 1, 1, 0)])
+	soft.gradient = sg
+	qm.albedo_texture = soft
+	quad.material = qm
+	p.draw_pass_1 = quad
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(p)
+	p.position = center
+	return p

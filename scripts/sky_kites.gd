@@ -61,6 +61,20 @@ func setup(wind_in: WindSys, origin: Vector3) -> void:
 	add_child(lines)
 
 
+## Dim every far kite and its line — on a map flown into the sun they read
+## as paper silhouettes, not bright colour.
+func tint(c: Color) -> void:
+	for k in _kites:
+		var mesh := k.mesh as ArrayMesh
+		if mesh == null:
+			continue
+		var m := mesh.surface_get_material(0) as StandardMaterial3D
+		if m:
+			m.albedo_color = c
+	if _line_mat:
+		_line_mat.albedo_color = Color(c.r, c.g, c.b, 0.16)
+
+
 func _process(delta: float) -> void:
 	if wind == null or _kites.is_empty():
 		return

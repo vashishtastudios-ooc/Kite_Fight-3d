@@ -40,7 +40,7 @@ const THERMAL_LIFT := 8.0              ## m/s in the core of a good thermal
 const THERMAL_CEIL := 110.0            ## how high the column still pulls
 const DEVIL_LIFT := 13.0
 
-const HAZE := Color(0.98, 0.78, 0.52)
+const HAZE := Color(0.98, 0.72, 0.42)
 const SKY_TOP := Color(0.42, 0.34, 0.50)
 
 var _warp: FastNoiseLite
@@ -83,29 +83,34 @@ func build() -> void:
 
 
 func configure_world(env: Environment, sun: DirectionalLight3D) -> void:
-	## A low, huge sun over the dunes: long shadows, hot gold light.
-	sun.rotation_degrees = Vector3(-6.0, 128.0, 0.0)
-	sun.light_color = Color(1.0, 0.76, 0.44)
-	sun.light_energy = 1.15
-	sun.directional_shadow_max_distance = 200.0
+	## The sun sits low in front of the flyer, so the whole desert is backlit:
+	## dunes, palms and kites read as silhouettes against the glare, and only
+	## their crests catch light. That contrast is the whole look.
+	sun.rotation_degrees = Vector3(-4.0, 186.0, 0.0)
+	sun.light_color = Color(1.0, 0.70, 0.36)
+	sun.light_energy = 1.5
+	sun.directional_shadow_max_distance = 260.0
 	var sky_mat := env.sky.sky_material as ShaderMaterial if env.sky else null
 	if sky_mat:
 		sky_mat.set_shader_parameter("day_top_color", SKY_TOP)
-		sky_mat.set_shader_parameter("day_bottom_color", Color(0.92, 0.62, 0.42))
+		sky_mat.set_shader_parameter("day_bottom_color", Color(0.86, 0.42, 0.24))
 		sky_mat.set_shader_parameter("horizon_color_day", HAZE)
 		sky_mat.set_shader_parameter("sunset_top_color", SKY_TOP)
-		sky_mat.set_shader_parameter("sunset_bottom_color", Color(0.96, 0.66, 0.40))
+		sky_mat.set_shader_parameter("sunset_bottom_color", Color(0.90, 0.44, 0.24))
 		sky_mat.set_shader_parameter("horizon_color_sunset", Color(1.0, 0.80, 0.46))
 		sky_mat.set_shader_parameter("clouds_main_color", Color(0.96, 0.74, 0.56))
 		sky_mat.set_shader_parameter("clouds_edge_color", Color(0.85, 0.58, 0.46))
 		## Desert sky: almost bare, just a few high streaks.
 		sky_mat.set_shader_parameter("clouds_opacity", 0.1)
 		sky_mat.set_shader_parameter("clouds_cutoff", 0.42)
-		sky_mat.set_shader_parameter("sun_col", Color(1.0, 0.88, 0.58))
-		sky_mat.set_shader_parameter("sun_size", 0.16)
-		sky_mat.set_shader_parameter("sun_blur", 0.5)
-		sky_mat.set_shader_parameter("horizon_falloff", 2.8)
-	env.ambient_light_energy = 0.7
+		sky_mat.set_shader_parameter("sun_col", Color(1.0, 0.92, 0.62))
+		sky_mat.set_shader_parameter("sun_size", 0.2)
+		sky_mat.set_shader_parameter("sun_blur", 0.34)
+		sky_mat.set_shader_parameter("horizon_falloff", 2.2)
+	## Very little fill: shaded sand goes deep red-brown, not pale gold.
+	env.ambient_light_color = Color(0.52, 0.30, 0.30)
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_energy = 0.32
 	env.fog_light_color = HAZE
 	env.fog_depth_begin = 60.0
 	env.fog_depth_end = 950.0
@@ -116,7 +121,13 @@ func configure_world(env: Environment, sun: DirectionalLight3D) -> void:
 	env.fog_height = 24.0
 	env.fog_height_density = 0.012
 	env.ssao_enabled = false
-	env.adjustment_saturation = 1.08
+	## The sun blooms, and the glare spills round the silhouettes.
+	env.glow_enabled = true
+	env.glow_intensity = 0.7
+	env.glow_bloom = 0.25
+	env.glow_hdr_threshold = 0.62
+	env.adjustment_contrast = 1.12
+	env.adjustment_saturation = 1.16
 
 
 func set_wind(w: Node) -> void:
@@ -270,7 +281,7 @@ func _build_dunes() -> void:
 	var mesh := st.commit()
 	var mat := ShaderMaterial.new()
 	mat.shader = SAND_SHADER
-	mat.set_shader_parameter("sun_dir", Vector3(sin(deg_to_rad(128.0)), 0.2, -cos(deg_to_rad(128.0))))
+	mat.set_shader_parameter("sun_dir", Vector3(sin(deg_to_rad(186.0)), 0.12, -cos(deg_to_rad(186.0))))
 	mesh.surface_set_material(0, mat)
 	var mi := MeshInstance3D.new()
 	mi.name = "Dunes"
@@ -282,10 +293,10 @@ func _build_dunes() -> void:
 ## Layers of far dunes and rock ridges, each paler than the last.
 func _build_far_dunes() -> void:
 	var layers := [
-		{"r": 680.0, "base": 6.0, "top": 95.0, "body": Color(0.80, 0.50, 0.34), "peak": Color(0.92, 0.66, 0.42), "haze": 0.35, "seed": 5, "smooth": 1.5},
-		{"r": 980.0, "base": 8.0, "top": 140.0, "body": Color(0.78, 0.50, 0.44), "peak": Color(0.90, 0.64, 0.50), "haze": 0.45, "seed": 15, "smooth": 1.2},
-		{"r": 1350.0, "base": 10.0, "top": 200.0, "body": Color(0.76, 0.54, 0.58), "peak": Color(0.88, 0.68, 0.64), "haze": 0.55, "seed": 25, "smooth": 1.0},
-		{"r": 1850.0, "base": 12.0, "top": 275.0, "body": Color(0.80, 0.64, 0.72), "peak": Color(0.90, 0.76, 0.78), "haze": 0.66, "seed": 35, "smooth": 0.8},
+		{"r": 680.0, "base": 6.0, "top": 95.0, "body": Color(0.42, 0.18, 0.16), "peak": Color(0.58, 0.26, 0.20), "haze": 0.42, "seed": 5, "smooth": 1.5},
+		{"r": 980.0, "base": 8.0, "top": 140.0, "body": Color(0.58, 0.26, 0.20), "peak": Color(0.74, 0.36, 0.24), "haze": 0.5, "seed": 15, "smooth": 1.2},
+		{"r": 1350.0, "base": 10.0, "top": 200.0, "body": Color(0.74, 0.38, 0.26), "peak": Color(0.88, 0.52, 0.30), "haze": 0.6, "seed": 25, "smooth": 1.0},
+		{"r": 1850.0, "base": 12.0, "top": 275.0, "body": Color(0.88, 0.54, 0.32), "peak": Color(0.96, 0.68, 0.40), "haze": 0.7, "seed": 35, "smooth": 0.8},
 	]
 	for L in layers:
 		_dune_curtain(L)
@@ -363,16 +374,32 @@ func _build_desert_props() -> void:
 	_props.stepwell(Vector3(-40.0, height_at(-40.0, -40.0), -40.0))
 	## A camel train plodding along a hollow.
 	_props.caravan(self, Vector2(70.0, 10.0), Vector2(-120.0, -90.0), 6)
-	## Khejri trees where the sand is shallow.
+	## Date palms in loose groves, a few close by to frame the view, and
+	## khejri scrub further out.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 4242
-	for i in 40:
+	var groves := [Vector2(34.0, 34.0), Vector2(-52.0, 18.0), Vector2(62.0, -36.0), Vector2(-74.0, -64.0), Vector2(18.0, -120.0), Vector2(-120.0, -150.0)]
+	for gc in groves:
+		var n := rng.randi_range(3, 7)
+		for i in n:
+			var x: float = gc.x + rng.randf_range(-16.0, 16.0)
+			var z: float = gc.y + rng.randf_range(-14.0, 14.0)
+			if TOWN.grow(6.0).has_point(Vector2(x, z)):
+				continue
+			_props.palm(Vector3(x, height_at(x, z) - 0.3, z), rng)
+	## Two tall palms right beside the rooftop, off to the sides, as framing.
+	for sx in [-1.0, 1.0]:
+		var px: float = HOME.x + sx * 28.0
+		var pz := HOME.y + 2.0
+		_props.palm(Vector3(px, height_at(px, pz) - 0.3, pz), rng, 1.5)
+	for i in 26:
 		var x := rng.randf_range(-340.0, 340.0)
 		var z := rng.randf_range(-420.0, 240.0)
 		var h := height_at(x, z)
 		if h > 12.0 or TOWN.grow(12.0).has_point(Vector2(x, z)):
 			continue
 		_props.khejri(Vector3(x, h - 0.2, z), rng)
+	_props.motes(Vector3(HOME.x, SHELF + 6.0, HOME.y - 90.0))
 
 
 # ── Thermals and dust devils ─────────────────────────────────────────────────

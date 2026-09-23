@@ -179,6 +179,9 @@ func _ready() -> void:
 	far_kites.name = "SkyKites"
 	add_child(far_kites)
 	far_kites.setup(wind, city.spawn_position)
+	## Flying into a low sun, the far kites are silhouettes like everything else.
+	if _map_id == "registan":
+		far_kites.tint(Color(0.30, 0.15, 0.13))
 	var wind_audio := preload("res://scripts/wind_audio.gd").new()
 	wind_audio.name = "WindAudio"
 	add_child(wind_audio)
