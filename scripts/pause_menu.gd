@@ -5,7 +5,7 @@ const SettingsSc := preload("res://scripts/game_settings.gd")
 const KiteSkins := preload("res://scripts/kite_skins.gd")
 const Brand := preload("res://scripts/brand.gd")
 const ProfileSc := preload("res://scripts/profile.gd")
-const TitleMarkSc := preload("res://scripts/title_mark.gd")
+const PatangMarkSc := preload("res://scripts/patang_mark.gd")
 
 signal quit_requested
 signal settings_changed
@@ -49,6 +49,9 @@ var _in_kites: bool = false
 var _in_profile: bool = false
 var _in_quit: bool = false
 var _in_credits: bool = false
+## Opened straight onto a page from the home screen: Back closes the menu
+## instead of landing on the pause page.
+var _direct: bool = false
 
 
 func is_open() -> bool:
@@ -75,6 +78,9 @@ func setup(settings_in: SettingsSc, profile_in: ProfileSc = null) -> void:
 
 
 func toggle() -> void:
+	if _open and _direct:
+		close()
+		return
 	if _open and _in_how:
 		_in_how = false
 		open_pause()
@@ -185,6 +191,7 @@ func open_kites() -> void:
 
 func close() -> void:
 	_save_name()
+	_direct = false
 	_open = false
 	_in_settings = false
 	_in_how = false
@@ -258,10 +265,12 @@ func _build() -> void:
 	_pause_box.custom_minimum_size = Vector2(520, 0)
 	center.add_child(_pause_box)
 	var pause_col := _vbox(_pause_box)
-	var mark := TitleMarkSc.new()
-	mark.mark_scale = 0.52
+	var mark := PatangMarkSc.new()
+	mark.variant = 1
+	mark.mark_scale = 0.62
 	mark.show_tag = true
 	mark.lively = true
+	mark.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	pause_col.add_child(mark)
 	_pause_rank = _caption("Rookie")
 	_pause_rank.add_theme_color_override("font_color", Brand.GOLD)
@@ -275,7 +284,7 @@ func _build() -> void:
 	pause_col.add_child(_btn("How to play", open_how))
 	pause_col.add_child(_btn("Settings", open_settings))
 	pause_col.add_child(_btn("Credits", open_credits))
-	pause_col.add_child(_btn("Back to rooftop", _ask_title))
+	pause_col.add_child(_btn("Home", _ask_title))
 	pause_col.add_child(_btn("Quit", _ask_quit))
 
 	_settings_box = _make_card()
@@ -365,12 +374,31 @@ func _build() -> void:
 
 
 func _back_from_settings() -> void:
+	if _direct:
+		close()
+		return
 	_in_settings = false
 	_in_how = false
 	_in_kites = false
 	_in_profile = false
 	_in_quit = false
 	_in_credits = false
+	open_pause()
+
+
+## From the home screen: straight to one page, Back returns home.
+func open_direct(page: String) -> void:
+	match page:
+		"kites": open_kites()
+		"profile": open_profile()
+		_: open_settings()
+	_direct = true
+
+
+func _back_to_pause() -> void:
+	if _direct:
+		close()
+		return
 	open_pause()
 
 
@@ -406,7 +434,7 @@ func _fill_kites(card: PanelContainer) -> void:
 	_buy_row.add_child(_btn("Buy", _confirm_buy))
 	_buy_row.add_child(_btn("Not now", _cancel_buy))
 	v.add_child(_buy_row)
-	v.add_child(_btn("Back", open_pause))
+	v.add_child(_btn("Back", _back_to_pause))
 	refresh_kite_cards("")
 
 
@@ -438,7 +466,7 @@ func _fill_profile(card: PanelContainer) -> void:
 	track.add_child(_xp_fill)
 	_rec_lab = _caption("0–0  ·  0 cuts")
 	v.add_child(_rec_lab)
-	v.add_child(_btn("Back", open_pause))
+	v.add_child(_btn("Back", _back_to_pause))
 
 
 func refresh_profile() -> void:
@@ -575,7 +603,7 @@ func _fill_how(card: PanelContainer) -> void:
 	body.add_child(_how_block("DODGE", Color(1.0, 0.45, 0.28), "Save the Kite: Diwali rockets lock where you were. Q or E off the path before they burst. Three real dodges fill a pink dart. A hit knocks you down."))
 	body.add_child(_how_block("CUT", Color(1.0, 0.38, 0.72), "Battle: steer so the two manjhas make a plus sign. Closer to 90° saws faster. Hold Q to bite. Miss the angle and you ghost through. First to 2 kaata."))
 	body.add_child(_how_block("SLIP", Color(0.95, 0.78, 0.35), "Hold E to drop off the X. You keep your string and lose height. Stay on the cross while they bite and your manjha thins. Watch the small string bars."))
-	v.add_child(_btn("Back", open_pause))
+	v.add_child(_btn("Back", _back_to_pause))
 
 
 func _how_block(heading: String, accent: Color, copy: String) -> PanelContainer:
@@ -715,11 +743,11 @@ func _fill_credits(card: PanelContainer) -> void:
 	v.add_theme_constant_override("separation", 10)
 	card.add_child(v)
 	v.add_child(_title("CREDITS"))
-	v.add_child(_caption("KITE BATTLE 3D  ·  Patangbaaz"))
+	v.add_child(_caption("PATANG  ·  A rooftop kite fight"))
 	v.add_child(_caption("A dusk rooftop kite fight. Generated city. Your manjha vs theirs."))
 	v.add_child(_caption("Paper flutter, wind, and city bed are original recordings for this game."))
 	v.add_child(_caption("People and kite meshes are licensed 3D kits. Godot Engine: MIT."))
-	v.add_child(_btn("Back", open_pause))
+	v.add_child(_btn("Back", _back_to_pause))
 
 
 func _attach_vol(parent: VBoxContainer, caption: String, cb: Callable) -> HSlider:

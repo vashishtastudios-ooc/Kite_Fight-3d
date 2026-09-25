@@ -81,6 +81,7 @@ func build() -> void:
 	_props = PropsSc.new(self)
 	_build_town()
 	_build_desert_props()
+	_build_royal_oasis()
 	_plan_thermals()
 	_plan_rocket_pads()
 
@@ -91,7 +92,7 @@ func configure_world(env: Environment, sun: DirectionalLight3D) -> void:
 	## their crests catch light. That contrast is the whole look.
 	sun.rotation_degrees = Vector3(-4.0, 186.0, 0.0)
 	sun.light_color = Color(1.0, 0.70, 0.36)
-	sun.light_energy = 1.5
+	sun.light_energy = 1.2
 	sun.directional_shadow_max_distance = 260.0
 	var sky_mat := env.sky.sky_material as ShaderMaterial if env.sky else null
 	if sky_mat:
@@ -111,9 +112,9 @@ func configure_world(env: Environment, sun: DirectionalLight3D) -> void:
 		sky_mat.set_shader_parameter("sun_blur", 0.34)
 		sky_mat.set_shader_parameter("horizon_falloff", 2.2)
 	## Very little fill: shaded sand goes deep red-brown, not pale gold.
-	env.ambient_light_color = Color(0.52, 0.30, 0.30)
+	env.ambient_light_color = Color(0.62, 0.43, 0.40)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_energy = 0.32
+	env.ambient_light_energy = 0.52
 	env.fog_light_color = HAZE
 	env.fog_depth_begin = 60.0
 	env.fog_depth_end = 950.0
@@ -129,7 +130,7 @@ func configure_world(env: Environment, sun: DirectionalLight3D) -> void:
 	env.glow_intensity = 0.7
 	env.glow_bloom = 0.25
 	env.glow_hdr_threshold = 0.62
-	env.adjustment_contrast = 1.12
+	env.adjustment_contrast = 1.06
 	env.adjustment_saturation = 1.16
 
 
@@ -217,7 +218,15 @@ func is_solid(p: Vector3) -> bool:
 func height_at(x: float, z: float) -> float:
 	var h := _dune_height(x, z)
 	h = maxf(h, _shelf(x, z))
+	## Grade the inhabited shelf, including the projecting flight decks.
+	## Taking max(dune, shelf) alone lets dune crests pierce the roof floors.
+	var town_center := TOWN.get_center()
+	var outside := Vector2(maxf(absf(x-town_center.x)-TOWN.size.x*.5,0.0),maxf(absf(z-town_center.y)-TOWN.size.y*.5,0.0))
+	h = lerpf(SHELF, h, smoothstep(0.0, 45.0, outside.length()))
 	h = maxf(h, _fort_rock(x, z))
+	var oasis_distance := Vector2(x-135.0, (z+145.0)/0.66).length()
+	var oasis_floor := _dune_height(135.0,-145.0)-3.0
+	h = lerpf(oasis_floor, h, smoothstep(21.0, 35.0, oasis_distance))
 	return h
 
 
@@ -383,8 +392,8 @@ func _build_desert_props() -> void:
 	## A camel train on a long loop over the dunes in front, so it is always
 	## crossing someone's view, skylined on the crests.
 	var route := PackedVector2Array([
-		Vector2(150.0, -30.0), Vector2(40.0, -70.0), Vector2(-70.0, -60.0), Vector2(-170.0, -110.0),
-		Vector2(-200.0, -200.0), Vector2(-90.0, -250.0), Vector2(60.0, -230.0), Vector2(170.0, -150.0),
+		Vector2(95.0, 25.0), Vector2(30.0, -15.0), Vector2(-45.0, -10.0), Vector2(-95.0, -45.0),
+		Vector2(-105.0, -110.0), Vector2(-35.0, -135.0), Vector2(45.0, -115.0), Vector2(100.0, -55.0),
 	])
 	_caravan = _props.caravan(self, route, 8)
 	## Date palms in loose groves, a few close by to frame the view, and
@@ -451,3 +460,52 @@ func _drift_thermals(delta: float) -> void:
 func _plan_rocket_pads() -> void:
 	for s in [Vector2(30.0, 40.0), Vector2(-52.0, 20.0), Vector2(18.0, -30.0)]:
 		rocket_pads.append(Vector3(s.x, height_at(s.x, s.y) + 0.2, s.y))
+
+
+## An original carved observatory crowns the fort; an oasis and a caravan
+## gate create a second focal point on the right without blocking launch.
+func _build_royal_oasis() -> void:
+	var palace := preload("res://assets/map_art/desert_observatory.glb").instantiate() as Node3D
+	add_child(palace)
+	palace.position = Vector3(FORT.x, FORT_TOP + 14.0, FORT.y)
+	palace.scale = Vector3.ONE * 1.35
+	building_aabbs.append(AABB(Vector3(FORT.x-52,FORT_TOP,FORT.y-20),Vector3(104,58,40)))
+	var gate := preload("res://assets/map_art/caravan_gate.glb").instantiate() as Node3D
+	add_child(gate)
+	gate.position = Vector3(108, height_at(108,-65)-0.4, -65)
+	gate.rotation.y = -0.28
+	gate.scale = Vector3.ONE * 1.2
+	building_aabbs.append(AABB(gate.position+Vector3(-13,0,-4),Vector3(26,20,8)))
+	var water := MeshInstance3D.new()
+	var disc := CylinderMesh.new()
+	disc.top_radius = 25.0
+	disc.bottom_radius = 25.0
+	disc.height = 0.12
+	disc.radial_segments = 80
+	water.mesh = disc
+	var wm := ShaderMaterial.new()
+	wm.shader = preload("res://shaders/royal_water.gdshader")
+	wm.set_shader_parameter("deep_color",Color(.035,.25,.25))
+	wm.set_shader_parameter("glint_color",Color(.46,.80,.64))
+	wm.set_shader_parameter("night",0.0)
+	water.material_override = wm
+	water.position = Vector3(135, height_at(135,-145)+1.0, -145)
+	water.scale.z = 0.66
+	add_child(water)
+	var pavilion := preload("res://assets/map_art/oasis_pavilion.glb").instantiate() as Node3D
+	add_child(pavilion)
+	pavilion.position = Vector3(164,height_at(164,-140)-0.2,-140)
+	pavilion.scale = Vector3.ONE * 1.65
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1315
+	for i in 11:
+		var a := float(i)/11.0*TAU
+		var x := 135.0 + cos(a)*32.0
+		var z := -145.0 + sin(a)*25.0
+		_props.palm(Vector3(x,height_at(x,z)-.2,z),rng,0.85)
+	for side in [-1,1]:
+		for i in 5:
+			var lantern := preload("res://assets/map_art/brass_lantern.glb").instantiate() as Node3D
+			add_child(lantern)
+			lantern.position = Vector3(side*10.0,DECK+1.0,82.0+i*5)
+			lantern.scale = Vector3.ONE*.65

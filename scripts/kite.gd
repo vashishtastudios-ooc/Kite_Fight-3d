@@ -108,6 +108,10 @@ var is_ai: bool = false
 var is_rival: bool = false
 ## Upward air the map is giving the kite right now (ridge lift), m/s.
 var lift_now: float = 0.0
+## Tukkals: paper lanterns tied along the string under the kite at night.
+const TUKKAL_COUNT := 4
+const TUKKAL_GAP := 3.2            ## metres of string between lanterns
+var _tukkals: Array[MeshInstance3D] = []
 var sail_id: String = KiteSkins.SAFFRON
 var viewer_pos: Vector3 = Vector3.ZERO
 var _eye: Vector3 = Vector3.ZERO
@@ -996,11 +1000,58 @@ func _update_readability() -> void:
 			_nose_mat.emission_energy_multiplier = lerpf(0.35, 1.6, far)
 
 
+## Hang (or take down) the night lanterns on this kite's string.
+func set_tukkals(on: bool) -> void:
+	for t in _tukkals:
+		t.queue_free()
+	_tukkals.clear()
+	if not on:
+		return
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = Color(1.0, 0.70, 0.34)
+	m.emission_enabled = true
+	m.emission = Color(1.0, 0.62, 0.28)
+	m.emission_energy_multiplier = 4.5
+	for i in TUKKAL_COUNT:
+		var mi := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(0.28, 0.4, 0.28)
+		mi.mesh = box
+		mi.material_override = m
+		mi.top_level = true
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.name = "Tukkal%d" % i
+		add_child(mi)
+		_tukkals.append(mi)
+
+
+func _update_tukkals(on: bool) -> void:
+	if _tukkals.is_empty():
+		return
+	var length := hand_pos.distance_to(global_position)
+	var eye := _eye_pos()
+	for i in _tukkals.size():
+		var t := _tukkals[i]
+		t.visible = on and length > 6.0
+		if not t.visible:
+			continue
+		## Strung down the line from the kite, each swinging a little below it.
+		var along := 1.0 - (TUKKAL_GAP * float(i + 1)) / maxf(length, 1.0)
+		var p := line_point(clampf(along, 0.0, 1.0)) + Vector3.DOWN * 0.45
+		p += Vector3(sin(_bob_t * 1.7 + float(i)), 0.0, cos(_bob_t * 1.3 + float(i))) * 0.08
+		t.global_position = p
+		## Grow with distance so a far kite still shows its lights.
+		var s := clampf(eye.distance_to(p) * 0.012, 1.0, 7.0)
+		t.scale = Vector3.ONE * s
+
+
 func _update_line() -> void:
 	if _line_segs.is_empty():
 		return
 	if phase == Phase.GROUNDED or phase == Phase.CUT:
 		_line_root.visible = false
+		_update_tukkals(false)
 		return
 	var a := hand_pos
 	var b := global_position
@@ -1009,6 +1060,7 @@ func _update_line() -> void:
 		_line_root.visible = false
 		return
 	_line_root.visible = true
+	_update_tukkals(true)
 	var taut := (1.0 - slack) * clampf(tension / 28.0, 0.0, 1.0)
 	var sag := lerpf(length * 0.09, length * 0.006, taut)
 	var mid := (a + b) * 0.5 + Vector3.DOWN * sag

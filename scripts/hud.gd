@@ -14,16 +14,27 @@ const Brand := preload("res://scripts/brand.gd")
 const MapRegistry := preload("res://scripts/map_registry.gd")
 const MapTileSc := preload("res://scripts/map_tile.gd")
 const TitleCardSc := preload("res://scripts/title_card.gd")
-const TitleMarkSc := preload("res://scripts/title_mark.gd")
+const PatangMarkSc := preload("res://scripts/patang_mark.gd")
 const ProfileSc := preload("res://scripts/profile.gd")
 const ProfileCardSc := preload("res://scripts/profile_card.gd")
+const HomeSc := preload("res://scripts/home_screen.gd")
+const CoachSc := preload("res://scripts/coach_card.gd")
+const ResultSc := preload("res://scripts/result_card.gd")
+
+const MODE_TITLES := {"battle": "Classic Battle", "save": "Save the Kite", "online": "Online Battle"}
 
 signal character_chosen(id: String)
-signal mode_chosen(id: String)
-signal map_chosen(id: String)
 signal online_host
 signal online_join(code: String)
 signal title_requested
+## The flow: home screen, browsing modes and maps, the tutorial and results.
+signal home_play
+signal flyer_requested
+signal flyer_back
+signal play_requested(mode: String, map: String)
+signal map_requested(map: String)
+signal tutorial_skip
+signal result_action(id: String)
 
 var wind: WindSys
 var kite: KiteSc
@@ -70,6 +81,7 @@ var zoom: float = 0.0
 var _intro: Control
 var _intro_prompt: Label
 var _intro_t: float = 0.0
+var _intro_mark: Control
 var _intro_on: bool = false
 var _cine: Control
 var _cine_top: ColorRect
@@ -87,8 +99,7 @@ var _map_tiles: Array = []
 var _travel: Control
 ## The map this evening is on (the picker marks it), and whether the map step
 ## was already taken (after travelling, the flyer lands straight on modes).
-var current_map_id: String = "city"
-var skip_map_step: bool = false
+var current_map_id: String = "pahadi"
 var _mode_label: Label
 var _net_row: HBoxContainer
 var _net_status: Label
@@ -98,7 +109,16 @@ var _title_card: Control
 var _vs: Control
 var _vs_you: ProfileCardSc
 var _vs_them: ProfileCardSc
-var _payout: Label
+var home: HomeSc
+var coach: CoachSc
+var result: ResultSc
+var _back_btn: Button
+var _name_edit: LineEdit
+## Where the player is while browsing from home: "modes", "modes_map",
+## "maps" or "flyer". Empty in the tutorial and in a fight.
+var _browse: String = ""
+var _pending_mode: String = "battle"
+var _home_mode: String = "battle"
 
 
 func setup(wind_in: WindSys, kite_in: KiteSc, rival_in: KiteSc = null, pech_in: PechSc = null) -> void:
@@ -164,8 +184,25 @@ func _build() -> void:
 	root.add_child(_title_card)
 	_build_intro(root)
 	_build_vs(root)
-	_build_payout(root)
 	_build_letterbox(root)
+	home = HomeSc.new()
+	root.add_child(home)
+	home.play_pressed.connect(func() -> void: home_play.emit())
+	home.modes_pressed.connect(open_modes)
+	home.maps_pressed.connect(open_maps)
+	home.flyer_pressed.connect(func() -> void: flyer_requested.emit())
+	home.settings_pressed.connect(func() -> void: _menu.open_direct("settings"))
+	home.kites_pressed.connect(func() -> void: _menu.open_direct("kites"))
+	home.profile_pressed.connect(func() -> void: _menu.open_direct("profile"))
+	coach = CoachSc.new()
+	root.add_child(coach)
+	coach.skip_pressed.connect(func() -> void: tutorial_skip.emit())
+	result = ResultSc.new()
+	root.add_child(result)
+	result.action.connect(func(id: String) -> void:
+		result.close()
+		result_action.emit(id))
+	_build_back_button(root)
 	_menu = PauseSc.new()
 	add_child(_menu)
 	_menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -499,13 +536,15 @@ func _build_intro(root: Control) -> void:
 	box.offset_bottom = 430.0
 	_intro.add_child(box)
 
-	var mark := TitleMarkSc.new()
-	mark.mark_scale = 1.0
+	var mark := PatangMarkSc.new()
+	mark.variant = 1
+	mark.mark_scale = 0.78
 	mark.show_tag = true
 	mark.lively = true
 	mark.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	box.add_child(mark)
+	_intro_mark = mark
 
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 28)
@@ -537,11 +576,35 @@ func _build_intro(root: Control) -> void:
 		Color(0.82, 0.18, 0.22),
 	]))
 
+	_name_edit = LineEdit.new()
+	_name_edit.placeholder_text = "Your name (optional)"
+	_name_edit.max_length = 16
+	_name_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_name_edit.custom_minimum_size = Vector2(418, 64)
+	_name_edit.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_name_edit.add_theme_font_override("font", Brand.body_font())
+	_name_edit.add_theme_font_size_override("font_size", 24)
+	_name_edit.add_theme_color_override("font_color", Brand.CREAM)
+	_name_edit.add_theme_color_override("font_placeholder_color", Color(1.0, 0.94, 0.82, 0.45))
+	var nsb := StyleBoxFlat.new()
+	nsb.bg_color = Color(0.08, 0.07, 0.08, 0.86)
+	nsb.border_color = Color(1.0, 0.84, 0.38, 0.5)
+	nsb.set_border_width_all(2)
+	nsb.set_corner_radius_all(14)
+	nsb.content_margin_left = 16
+	nsb.content_margin_right = 16
+	_name_edit.add_theme_stylebox_override("normal", nsb)
+	var nfocus := nsb.duplicate() as StyleBoxFlat
+	nfocus.border_color = Brand.GOLD
+	_name_edit.add_theme_stylebox_override("focus", nfocus)
+	_name_edit.visible = false
+	box.add_child(_name_edit)
+
 	_map_label = Label.new()
 	_map_label.text = "Choose where to fly"
 	_map_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_map_label.add_theme_font_override("font", Brand.body_font())
-	_map_label.add_theme_font_size_override("font_size", 22)
+	_map_label.add_theme_font_override("font", Brand.display_font())
+	_map_label.add_theme_font_size_override("font_size", 32)
 	_map_label.add_theme_color_override("font_color", Brand.GOLD)
 	_shadow(_map_label)
 	_map_label.visible = false
@@ -553,8 +616,8 @@ func _build_intro(root: Control) -> void:
 	_mode_label = Label.new()
 	_mode_label.text = "Choose a mode"
 	_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_mode_label.add_theme_font_override("font", Brand.body_font())
-	_mode_label.add_theme_font_size_override("font_size", 22)
+	_mode_label.add_theme_font_override("font", Brand.display_font())
+	_mode_label.add_theme_font_size_override("font_size", 32)
 	_mode_label.add_theme_color_override("font_color", Brand.GOLD)
 	_shadow(_mode_label)
 	_mode_label.visible = false
@@ -669,25 +732,6 @@ func _build_vs(root: Control) -> void:
 	_vs.add_child(vs_lab)
 
 
-func _build_payout(root: Control) -> void:
-	_payout = Label.new()
-	_payout.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_payout.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_payout.offset_left = -280.0
-	_payout.offset_right = 280.0
-	_payout.offset_top = 28.0
-	_payout.offset_bottom = 118.0
-	_payout.add_theme_font_override("font", Brand.display_font())
-	_payout.add_theme_font_size_override("font_size", 28)
-	_payout.add_theme_color_override("font_color", Brand.GOLD)
-	_payout.add_theme_color_override("font_outline_color", Brand.INK)
-	_payout.add_theme_constant_override("outline_size", 6)
-	_payout.modulate.a = 0.0
-	_payout.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_payout.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	root.add_child(_payout)
-
-
 func show_vs() -> void:
 	if _vs == null or profile == null:
 		return
@@ -713,31 +757,18 @@ func hide_vs() -> void:
 	)
 
 
-func show_payout(result: Dictionary) -> void:
-	if _payout == null:
-		return
-	var line := "+%d XP   ·   +%d coins   ·   %s" % [int(result.get("xp", 0)), int(result.get("coins", 0)), str(result.get("rank", ""))]
-	if bool(result.get("ranked_up", false)):
-		line += "  ↑"
-	var kind := str(result.get("kind", ""))
-	if kind == "battle":
-		var cuts := int(result.get("cuts", 0))
-		var won := bool(result.get("won", false))
-		line += "\nfinish + %d cut%s%s" % [cuts, "" if cuts == 1 else "s", "  ·  win" if won else ""]
-	elif kind == "save":
-		line += "\n%d rocket dodge%s" % [int(result.get("dodges", 0)), "" if int(result.get("dodges", 0)) == 1 else "s"]
-	_payout.text = line
-	_payout.modulate.a = 1.0
-	if _menu:
-		_menu.refresh_profile()
-	var tw := create_tween()
-	tw.tween_interval(3.2)
-	tw.tween_property(_payout, "modulate:a", 0.0, 0.6)
-
-
-func show_character_select() -> void:
+func show_character_select(from_home: bool = false) -> void:
 	if _intro == null:
 		return
+	_browse = "flyer" if from_home else ""
+	_show_back(from_home)
+	hide_home()
+	if _intro_mark:
+		_intro_mark.visible = true
+	if _name_edit:
+		_name_edit.visible = not from_home
+		if profile and profile.display_name != "You":
+			_name_edit.text = profile.display_name
 	set_letterbox(false)
 	if _title_card and _title_card.has_method("recede"):
 		_title_card.recede()
@@ -772,20 +803,7 @@ func hide_chrome() -> void:
 		_gear.visible = false
 
 
-func reset_to_title() -> void:
-	hide_chrome()
-	hide_vs()
-	hide_net_lobby()
-	game_mode = ""
-	if _title_card and _title_card.has_method("replay"):
-		_title_card.replay()
-	if _intro:
-		_intro.visible = false
-		_intro_on = false
-		_intro.modulate.a = 0.0
-
-
-func set_letterbox(on: bool, caption: String = "", skip: String = "SPACE  skip") -> void:
+func set_letterbox(on: bool, caption: String = "", skip: String = "Tap to skip") -> void:
 	if _cine == null:
 		return
 	_cine.visible = on
@@ -838,7 +856,7 @@ func _build_letterbox(root: Control) -> void:
 	_cine_skip.offset_right = -28.0
 	_cine_skip.offset_bottom = 52.0
 	_cine_skip.add_theme_font_override("font", Brand.body_font())
-	_cine_skip.add_theme_font_size_override("font_size", 14)
+	_cine_skip.add_theme_font_size_override("font_size", 20)
 	_cine_skip.add_theme_color_override("font_color", Color(0.92, 0.86, 0.72, 0.7))
 	_cine_skip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_cine.add_child(_cine_skip)
@@ -963,15 +981,15 @@ func _make_mode_card(id: String, title: String, blurb: String, swatches: Array) 
 
 
 func _pick_character(id: String) -> void:
+	if _name_edit and _name_edit.visible and profile:
+		var n := _name_edit.text.strip_edges()
+		if n != "":
+			profile.display_name = n
+			profile.save_to_disk()
+	_hide_rows()
+	_show_back(false)
+	_browse = ""
 	character_chosen.emit(id)
-	if _char_row:
-		_char_row.visible = false
-	if _char_label:
-		_char_label.visible = false
-	if not skip_map_step:
-		show_map_select()
-		return
-	show_mode_select()
 
 
 ## Who -> Where -> How: the bento grid of maps.
@@ -1004,27 +1022,12 @@ func show_mode_select() -> void:
 
 
 func _pick_mode(id: String) -> void:
-	game_mode = id
-	mode_chosen.emit(id)
-	if _mode_row:
-		_mode_row.visible = false
-	if _mode_label:
-		_mode_label.visible = false
-	if id == "online":
-		if _net_row:
-			_net_row.visible = true
-		if _net_status:
-			_net_status.visible = true
-			_net_status.text = "Host a roof, or type a code to join."
-		if _intro_prompt:
-			_intro_prompt.visible = false
-		return
-	if _net_row:
-		_net_row.visible = false
-	if _intro_prompt:
-		_intro_prompt.visible = true
-	if id == "battle":
-		show_vs()
+	if _browse == "modes":
+		_pending_mode = id
+		_browse = "modes_map"
+		if _map_label:
+			_map_label.text = "%s  ·  choose where to fly" % MODE_TITLES.get(id, "")
+		show_map_select()
 
 
 func show_vs_cards(you: Dictionary, them: Dictionary) -> void:
@@ -1078,6 +1081,179 @@ func _make_net_btn(title: String, cb: Callable) -> Button:
 	b.add_theme_stylebox_override("hover", hot)
 	b.add_theme_stylebox_override("pressed", hot)
 	return b
+
+
+# ── Home and browsing ────────────────────────────────────────────────────────
+
+func show_home(mode: String) -> void:
+	_home_mode = mode
+	_browse = ""
+	_show_back(false)
+	_hide_rows()
+	if _intro:
+		_intro.visible = false
+		_intro_on = false
+	set_letterbox(false)
+	## Straight home at launch: the title sting never flies.
+	if _title_card and _title_card.has_method("recede"):
+		_title_card.recede()
+		_title_card.visible = false
+	hide_chrome()
+	hide_vs()
+	hide_net_lobby()
+	if coach:
+		coach.visible = false
+	var map_title := str(MapRegistry.find(current_map_id).get("title", ""))
+	home.fill(profile, str(MODE_TITLES.get(mode, "Classic Battle")), map_title)
+	home.open()
+
+
+func hide_home() -> void:
+	if home:
+		home.close()
+
+
+## Home -> Modes: the mode cards, then (after a pick) the map grid.
+func open_modes() -> void:
+	hide_home()
+	_open_browse("modes")
+	if _mode_label:
+		_mode_label.visible = true
+	if _mode_row:
+		_mode_row.visible = true
+
+
+## Home -> Maps: the grid; a pick moves home onto that map.
+func open_maps() -> void:
+	hide_home()
+	_open_browse("maps")
+	if _map_label:
+		_map_label.text = "Choose where to fly"
+	show_map_select()
+
+
+func _open_browse(where: String) -> void:
+	_browse = where
+	_hide_rows()
+	if _intro_mark:
+		_intro_mark.visible = false
+	_intro.visible = true
+	_intro_on = true
+	_intro.modulate.a = 0.0
+	_show_back(true)
+
+
+func _hide_rows() -> void:
+	for c in [_char_row, _char_label, _name_edit, _map_row, _map_label, _mode_row, _mode_label, _net_row, _net_status, _intro_prompt]:
+		if c:
+			c.visible = false
+
+
+## Mode picked and on the right map: the toss prompt, plus the VS cards for a
+## battle or the host/join row online.
+func show_ready(mode: String) -> void:
+	set_letterbox(false)
+	if _title_card and _title_card.has_method("recede"):
+		_title_card.recede()
+	_browse = ""
+	_show_back(false)
+	hide_home()
+	_hide_rows()
+	if _intro_mark:
+		_intro_mark.visible = false
+	_intro.visible = true
+	_intro_on = true
+	game_mode = "battle" if mode == "online" else mode
+	if mode == "online":
+		if _net_row:
+			_net_row.visible = true
+		if _net_status:
+			_net_status.visible = true
+			_net_status.text = "Host a roof, or type a code to join."
+		return
+	if _intro_prompt:
+		_intro_prompt.visible = true
+	if mode == "battle":
+		show_vs()
+
+
+## Tutorial: no menus, just the coach at the foot of the screen.
+func show_tutorial() -> void:
+	_browse = ""
+	_show_back(false)
+	hide_home()
+	_hide_rows()
+	## The intro layer stays "on" but empty, so the toss fades it and brings
+	## the line and wind cards in, as in any fight.
+	if _intro_mark:
+		_intro_mark.visible = false
+	if _intro:
+		_intro.visible = true
+		_intro_on = true
+	set_letterbox(false)
+	game_mode = "battle"
+
+
+func _build_back_button(root: Control) -> void:
+	_back_btn = Button.new()
+	_back_btn.text = "‹  Back"
+	_back_btn.focus_mode = Control.FOCUS_NONE
+	_back_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_back_btn.position = Vector2(40, 36)
+	_back_btn.custom_minimum_size = Vector2(170, 68)
+	_back_btn.add_theme_font_override("font", Brand.display_font())
+	_back_btn.add_theme_font_size_override("font_size", 26)
+	_back_btn.add_theme_color_override("font_color", Brand.CREAM)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.07, 0.05, 0.08, 0.72)
+	sb.border_color = Color(1.0, 0.84, 0.38, 0.5)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(34)
+	var hot := sb.duplicate() as StyleBoxFlat
+	hot.bg_color = Color(0.18, 0.12, 0.10, 0.9)
+	hot.border_color = Brand.GOLD
+	_back_btn.add_theme_stylebox_override("normal", sb)
+	_back_btn.add_theme_stylebox_override("hover", hot)
+	_back_btn.add_theme_stylebox_override("pressed", hot)
+	_back_btn.pressed.connect(_on_back)
+	_back_btn.visible = false
+	root.add_child(_back_btn)
+
+
+func _show_back(on: bool) -> void:
+	if _back_btn:
+		_back_btn.visible = on
+
+
+func _on_back() -> void:
+	match _browse:
+		"modes_map":
+			_browse = "modes"
+			_hide_rows()
+			if _mode_label:
+				_mode_label.visible = true
+			if _mode_row:
+				_mode_row.visible = true
+		"flyer":
+			_hide_rows()
+			_show_back(false)
+			_browse = ""
+			flyer_back.emit()
+		_:
+			_intro.visible = false
+			_intro_on = false
+			show_home(_home_mode)
+
+
+func is_browsing() -> bool:
+	return _browse != ""
+
+
+## End of a fight or the tutorial.
+func show_result(title: String, sub: String, res: Dictionary, buttons: Array) -> void:
+	if _menu:
+		_menu.refresh_profile()
+	result.open(title, sub, res, buttons)
 
 
 func hide_intro() -> void:
@@ -1358,37 +1534,42 @@ func _draw_wind_dial() -> void:
 
 ## Bento grid: each real map a wide picture card, coming-soon teasers stacked
 ## in a narrow column at the end. Grows with MapRegistry.
+## Bento grid: picture cards three to a row, wrapping as maps are added, so
+## the grid never runs off the screen. Coming-soon teasers fill in after the
+## real maps. Grows with MapRegistry.
 func _build_map_grid() -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 14)
 	row.mouse_filter = Control.MOUSE_FILTER_STOP
-	var big := Vector2(330, 196)
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(grid)
+	var card := Vector2(270, 150)
 	for m in MapRegistry.MAPS:
 		var tile := MapTileSc.new()
-		tile.setup(m, big if m.get("size", "wide") == "wide" else Vector2(196, 196))
+		tile.setup(m, card)
 		var id: String = m["id"]
 		tile.pressed.connect(func() -> void: _pick_map(id))
-		row.add_child(tile)
+		grid.add_child(tile)
 		_map_tiles.append(tile)
-	if not MapRegistry.COMING.is_empty():
-		var col := VBoxContainer.new()
-		col.add_theme_constant_override("separation", 12)
-		col.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var n := MapRegistry.COMING.size()
-		var h := (big.y - 12.0 * float(n - 1)) / float(n)
-		for c in MapRegistry.COMING:
-			var tile := MapTileSc.new()
-			tile.setup(c, Vector2(186, h), true)
-			col.add_child(tile)
-		row.add_child(col)
+	for c in MapRegistry.COMING:
+		var tile := MapTileSc.new()
+		tile.setup(c, card, true)
+		grid.add_child(tile)
 	return row
 
 
 func _pick_map(id: String) -> void:
 	for t in _map_tiles:
 		t.set_selected(t.map_id == id)
-	map_chosen.emit(id)
+	if _browse == "modes_map":
+		play_requested.emit(_pending_mode, id)
+		return
+	if _browse == "maps":
+		map_requested.emit(id)
 
 
 ## Full-screen card for the trip to another map: its picture, its name.

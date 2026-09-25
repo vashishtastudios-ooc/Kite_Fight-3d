@@ -1,18 +1,18 @@
 extends Control
 
-## Opening sting: the wordmark kites across the dusk, then hands off to the terrace.
+## Opening sting: the Patang mark rises softly into the upper sky as the camera
+## comes down, holds while the flyover plays, then fades as it lands.
 
-const Brand := preload("res://scripts/brand.gd")
-const TitleMarkSc := preload("res://scripts/title_mark.gd")
-const CROSS_SEC := 6.2
+const PatangMarkSc := preload("res://scripts/patang_mark.gd")
+const HOLD_SEC := 4.6
 
 signal receded
 
 var _cluster: Control
 var _played: bool = false
 var _out: bool = false
-var _flying: bool = false
-var _fly_t: float = 0.0
+var _t: float = 0.0
+var _live: bool = false
 
 
 func _ready() -> void:
@@ -24,7 +24,8 @@ func _ready() -> void:
 
 
 func _build() -> void:
-	_cluster = TitleMarkSc.new()
+	_cluster = PatangMarkSc.new()
+	_cluster.variant = 1
 	_cluster.mark_scale = 1.15
 	_cluster.show_tag = true
 	_cluster.lively = true
@@ -37,37 +38,31 @@ func play() -> void:
 	_played = true
 	if is_inside_tree():
 		await get_tree().process_frame
-		await get_tree().process_frame
-	_cluster.reset_size()
-	_cluster.pivot_offset = _cluster.size * 0.5
+	if _out:
+		return
 	var vp := get_viewport_rect().size
-	_cluster.position = Vector2(-_cluster.size.x - 24.0, vp.y * 0.28)
-	_fly_t = 0.0
-	_flying = true
+	var home := Vector2((vp.x - _cluster.size.x) * 0.5, vp.y * 0.16)
+	_cluster.position = home + Vector2(0.0, 26.0)
+	_cluster.modulate.a = 0.0
+	var tw := create_tween().set_parallel()
+	tw.tween_property(_cluster, "modulate:a", 1.0, 1.4).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(_cluster, "position", home, 2.2).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_t = 0.0
+	_live = true
 
 
 func _process(delta: float) -> void:
-	if not _flying or _cluster == null or _out:
+	if not _live or _out:
 		return
-	_fly_t += delta
-	var vp := get_viewport_rect().size
-	var start_x := -_cluster.size.x - 24.0
-	var end_x := vp.x + 32.0
-	var u := clampf(_fly_t / CROSS_SEC, 0.0, 1.0)
-	var e := u * u * (3.0 - 2.0 * u)
-	var x := lerpf(start_x, end_x, e)
-	var base_y := vp.y * 0.28
-	var bob := sin(_fly_t * 2.05) * 38.0 + sin(_fly_t * 3.3 + 0.6) * 16.0
-	_cluster.position = Vector2(x, base_y + bob)
-	_cluster.rotation = sin(_fly_t * 2.05) * 0.09
-	if u >= 1.0:
+	_t += delta
+	if _t >= HOLD_SEC:
 		recede()
 
 
 func replay() -> void:
 	_played = false
 	_out = false
-	_flying = false
+	_live = false
 	visible = true
 	modulate.a = 1.0
 	play()
@@ -77,9 +72,9 @@ func recede() -> void:
 	if _out:
 		return
 	_out = true
-	_flying = false
+	_live = false
 	var tw := create_tween()
-	tw.tween_property(self, "modulate:a", 0.0, 0.35).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	tw.tween_property(self, "modulate:a", 0.0, 0.6).set_trans(Tween.TRANS_SINE)
 	tw.tween_callback(func() -> void:
 		visible = false
 		receded.emit()

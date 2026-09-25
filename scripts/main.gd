@@ -2,10 +2,8 @@ extends Node3D
 
 const WindSys := preload("res://scripts/wind_system.gd")
 const MapBase := preload("res://scripts/map_base.gd")
-const PahadiSc := preload("res://scripts/map_pahadi.gd")
-const RegistanSc := preload("res://scripts/map_registan.gd")
 const MapRegistry := preload("res://scripts/map_registry.gd")
-var _map_id: String = "city"
+var _map_id: String = MapRegistry.DEFAULT
 var _flyer_id: String = ""
 const PlayerSc := preload("res://scripts/player.gd")
 const KiteSc := preload("res://scripts/kite.gd")
@@ -20,6 +18,7 @@ const KiteSkins := preload("res://scripts/kite_skins.gd")
 const TitleKiteSc := preload("res://scripts/title_kite.gd")
 const ProfileSc := preload("res://scripts/profile.gd")
 const NetRoomSc := preload("res://scripts/net_room.gd")
+const TutorialSc := preload("res://scripts/tutorial.gd")
 
 @onready var world_env: WorldEnvironment = $WorldEnvironment
 @onready var sun: DirectionalLight3D = $Sun
@@ -68,6 +67,17 @@ var _remote_state: Dictionary = {}
 var _send_t: float = 0.0
 var _wind_audio: Node
 const INTRO_CAM_DUR := 6.0
+var _intro_cam_dur: float = INTRO_CAM_DUR
+## Home: a slow camera on the flyer, the sky behind them.
+var _home_on: bool = false
+var _home_cam: Camera3D
+var _home_t: float = 0.0
+var _home_from: Transform3D = Transform3D.IDENTITY
+var _home_from_fov: float = 60.0
+## First-launch tutorial.
+var _tutorial: TutorialSc
+var _tut_on: bool = false
+var _tut_rival: bool = false
 const BODY_BOY := preload("res://assets/people/stylized+boy+3d+model (1).glb")
 const BODY_GIRL := preload("res://assets/people/stylized+female+3d+newmodel.glb")
 
@@ -128,18 +138,34 @@ func _ready() -> void:
 	hud.graphics_host = self
 	hud.setup(wind, kite, rival, pech)
 	hud.character_chosen.connect(_on_character_chosen)
-	hud.mode_chosen.connect(_on_mode_chosen)
-	hud.map_chosen.connect(_on_map_chosen)
+	hud.home_play.connect(_on_home_play)
+	hud.play_requested.connect(_play)
+	hud.map_requested.connect(_on_map_requested)
+	hud.flyer_requested.connect(_on_flyer_requested)
+	hud.flyer_back.connect(func() -> void:
+		_apply_flyer(_profile.flyer_id)
+		_enter_home())
+	hud.tutorial_skip.connect(_skip_tutorial)
+	hud.result_action.connect(_on_result_action)
 	hud.current_map_id = _map_id
-	## Arrived from the map grid: skip the opening and land on mode select
-	## with the same flyer.
+	## Dev: KITE_FRESH=1 plays the first launch again (flyover, flyer, tutorial).
+	if OS.get_environment("KITE_FRESH") == "1":
+		_profile.onboarded = false
+	## Arrived from the map grid: skip the opening, same flyer, straight home
+	## (or straight into the fight PLAY asked for). A returning player who has
+	## seen today's flyover lands on the home screen at once.
 	if Engine.has_meta("travel_flyer"):
 		var flyer := str(Engine.get_meta("travel_flyer"))
 		Engine.remove_meta("travel_flyer")
 		call_deferred("_land_after_travel", flyer)
+	elif _profile.onboarded and _profile.last_flyover == _today():
+		call_deferred("_skip_intro_cam")
+	else:
+		_profile.last_flyover = _today()
+		_profile.save_to_disk()
 	hud.online_host.connect(_on_online_host)
 	hud.online_join.connect(_on_online_join)
-	hud.title_requested.connect(_return_to_title)
+	hud.title_requested.connect(_go_home)
 	_net = NetRoomSc.new()
 	_net.name = "NetRoom"
 	add_child(_net)
@@ -175,13 +201,10 @@ func _ready() -> void:
 	air.name = "WindVfx"
 	add_child(air)
 	air.setup(wind, city.spawn_position)
-	var far_kites := preload("res://scripts/sky_kites.gd").new()
-	far_kites.name = "SkyKites"
-	add_child(far_kites)
-	far_kites.setup(wind, city.spawn_position)
-	## Flying into a low sun, the far kites are silhouettes like everything else.
-	if _map_id == "registan":
-		far_kites.tint(Color(0.30, 0.15, 0.13))
+	## On a night map both strings carry tukkals, so the kites show in the dark.
+	if city.night:
+		kite.set_tukkals(true)
+		rival.set_tukkals(true)
 	var wind_audio := preload("res://scripts/wind_audio.gd").new()
 	wind_audio.name = "WindAudio"
 	add_child(wind_audio)
@@ -197,8 +220,17 @@ func _ready() -> void:
 	_setup_intro_cam()
 	_spawn_title_kite()
 	if hud:
-		hud.set_letterbox(true, "Jaipur dusk. One roof. Two strings.", "SPACE  skip")
-	print("Kite Battle 3d rooftop ready. Play-area buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
+		var caption := "Jaipur dusk. One roof. Two strings."
+		if _map_id == "registan":
+			caption = "Registan. Golden sand. Restless skies."
+		elif _map_id == "jaipur_night":
+			caption = "Jaipur Night. Moonlit roofs. Golden strings."
+		elif _map_id == "tukkal_raat":
+			caption = "Tukkal Raat. The moon rises. Every string a lantern."
+		elif _map_id == "pahadi":
+			caption = "Pahadi Sham. Mountain air. One last flight."
+		hud.set_letterbox(true, caption)
+	print("Patang rooftop ready. Play-area buildings: %d  Rocket pads: %d" % [city.building_aabbs.size(), city.rocket_pads.size()])
 	## Dev: capture a map card image into assets/ui/maps (THUMB_SHOT=<map id>,
 	## run windowed with KITE_MAP set to the same id). Re-run when a map changes.
 	var thumb := OS.get_environment("THUMB_SHOT")
@@ -212,7 +244,10 @@ func _ready() -> void:
 		tcam.environment = player.camera.environment
 		add_child(tcam)
 		var sp := city.spawn_position
-		if thumb == "registan":
+		if thumb == "jaipur_night":
+			tcam.global_position = sp + Vector3(22.0, 20.0, 38.0)
+			tcam.look_at(sp + Vector3(-20.0, 27.0, -300.0), Vector3.UP)
+		elif thumb == "registan":
 			tcam.global_position = sp + Vector3(30.0, 22.0, 40.0)
 			tcam.look_at(sp + Vector3(-30.0, 2.0, -260.0), Vector3.UP)
 		elif thumb == "pahadi":
@@ -310,6 +345,8 @@ func _physics_process(delta: float) -> void:
 			_launch_look = 1.6
 	elif Input.is_action_just_pressed("launch") and _intro_active and not _char_ui_shown:
 		_skip_intro_cam()
+	elif Input.is_action_just_pressed("launch") and _home_on and not hud.is_browsing():
+		_on_home_play()
 	if Input.is_action_just_pressed("relaunch"):
 		kite.relaunch()
 		_launch_look = 1.4
@@ -327,7 +364,9 @@ func _physics_process(delta: float) -> void:
 			_intro_cam = null
 		if player.camera:
 			player.camera.current = true
-		if _game_mode == "battle":
+		if _tut_on:
+			pass
+		elif _game_mode == "battle":
 			rival.visible = true
 			if not _online and not rival.is_airborne():
 				rival.launch()
@@ -359,8 +398,10 @@ func _physics_process(delta: float) -> void:
 				_send_t = 0.0
 				if _net:
 					_net.send_state(kite.pack_net())
-	elif _rival_ai and _game_mode == "battle":
+	elif _rival_ai and _game_mode == "battle" and (not _tut_on or _tut_rival):
 		_rival_ai.tick(delta)
+	if _tut_on and _tutorial:
+		_tutorial.tick(delta, kheench, dheel, bias, reel)
 	if pech and _game_mode == "battle":
 		pech.tick(delta, kite, rival)
 		player.set_pech_push(pech.grind())
@@ -375,6 +416,8 @@ func _physics_process(delta: float) -> void:
 
 	if not _back_view:
 		_follow_kite_cam(delta)
+	if _home_on:
+		_update_home_cam(delta)
 	if _intro_active and _intro_cam:
 		_update_intro_cam(delta)
 		if not _char_ui_shown and _intro_cam_t >= 1.0:
@@ -481,7 +524,7 @@ func _spawn_title_kite() -> void:
 func _update_intro_cam(delta: float) -> void:
 	if _intro_cam == null or player == null or player.camera == null:
 		return
-	_intro_cam_t = minf(1.0, _intro_cam_t + delta / INTRO_CAM_DUR)
+	_intro_cam_t = minf(1.0, _intro_cam_t + delta / _intro_cam_dur)
 	## Ease in-out for a settled, filmic move.
 	var e := smoothstep(0.0, 1.0, _intro_cam_t)
 	var end_xf := player.camera.global_transform
@@ -504,11 +547,13 @@ func _finish_intro_cam() -> void:
 	if _char_ui_shown:
 		return
 	_char_ui_shown = true
-	if hud:
-		hud.show_character_select()
 	if _title_kite and _title_kite.has_method("recede"):
 		_title_kite.recede()
 		_title_kite = null
+	if _profile.onboarded:
+		_enter_home()
+	elif hud:
+		hud.show_character_select()
 
 
 func _ensure_preview_people() -> void:
@@ -525,70 +570,6 @@ func _ensure_preview_people() -> void:
 		_preview_girl.setup(city.spawn_position + Vector3(1.55, 0.0, -2.15), cam, null, BODY_GIRL, false, true)
 
 
-func _return_to_title() -> void:
-	_online = false
-	_net_live = false
-	_peer_card = {}
-	_peer_id = ""
-	_remote_state = {}
-	if _net and _net.has_method("hangup"):
-		_net.hangup()
-	_flyer_picked = false
-	_character_picked = false
-	_game_mode = ""
-	_intro_active = true
-	_char_ui_shown = false
-	_cam_chase = false
-	_match_cuts = 0
-	_match_paid = false
-	_save_dodges = 0
-	_save_paid = false
-	_kheench_held = false
-	_dheel_held = false
-	_launch_look = 0.0
-	if pech:
-		pech.net_mode = false
-		pech.player_wins = 0
-		pech.rival_wins = 0
-	if _rockets:
-		_rockets.enabled = false
-	_set_back_view(false)
-	if kite:
-		kite.set_kheench(false)
-		kite.set_dheel(false)
-		kite.park_on_roof()
-		kite.visible = false
-	if rival:
-		rival.is_ai = true
-		rival.park_on_roof()
-		rival.visible = false
-	if player:
-		player.intro_lock = true
-		player.clear_avatar()
-		player.global_position = city.spawn_position
-		player.look_yaw = 0.0
-		player.look_pitch = -0.06
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	if _terrace_mate:
-		_terrace_mate.queue_free()
-		_terrace_mate = null
-	_ensure_preview_people()
-	if _intro_cam:
-		_intro_cam.queue_free()
-		_intro_cam = null
-	if player and player.camera:
-		player.camera.current = false
-	_setup_intro_cam()
-	_snap_camera_to_sky()
-	if _title_kite:
-		_title_kite.queue_free()
-		_title_kite = null
-	_spawn_title_kite()
-	if hud:
-		hud.reset_to_title()
-		hud.set_letterbox(true, "Jaipur dusk. One roof. Two strings.", "SPACE  skip")
-
-
 func _snap_camera_to_sky() -> void:
 	if player == null or player.camera == null:
 		return
@@ -600,19 +581,23 @@ func _snap_camera_to_sky() -> void:
 	player.look_pitch = clampf(atan2(to.y, Vector3(to.x, 0.0, to.z).length()), deg_to_rad(-80.0), deg_to_rad(75.0))
 
 
-## The City node in the scene is the Jaipur map — the opening always plays
-## there. Picking another map in the grid reloads the scene with the choice
-## kept on Engine meta, and that map replaces the city before anything is
-## built. KITE_MAP overrides (dev).
+## The City node in the scene is an empty placeholder; the chosen map's
+## script is loaded here and replaces it before anything is built. Only that
+## one map's models ever load, so a light map never pays for Jaipur's.
+## Picking another map in the grid reloads the scene with the choice kept on
+## Engine meta. KITE_MAP overrides (dev).
 func _swap_map() -> void:
 	var id := OS.get_environment("KITE_MAP")
 	if id == "" and Engine.has_meta("travel_map"):
 		id = str(Engine.get_meta("travel_map"))
-	_map_id = id if MapRegistry.has(id) else "city"
-	if _map_id == "city":
-		return
+	if id == "":
+		var prof := ProfileSc.new()
+		prof.load_from_disk()
+		id = prof.last_map
+	_map_id = id if MapRegistry.has(id) else MapRegistry.DEFAULT
 	var old := city
-	var m: MapBase = RegistanSc.new() if _map_id == "registan" else PahadiSc.new()
+	var sc: Script = load(MapRegistry.find(_map_id)["script"])
+	var m: MapBase = sc.new()
 	add_child(m)
 	move_child(m, old.get_index())
 	remove_child(old)
@@ -851,7 +836,17 @@ func _place_people() -> void:
 	other.setup(city.rocket_pads[0], city.spawn_position, null, BODY_BOY)
 
 
+## The flyer card was tapped: first launch goes into the tutorial, a change
+## of flyer from home goes back home.
 func _on_character_chosen(id: String) -> void:
+	_apply_flyer(id)
+	if _profile.onboarded:
+		_enter_home()
+	else:
+		_start_tutorial()
+
+
+func _apply_flyer(id: String) -> void:
 	if _character_picked:
 		return
 	_character_picked = true
@@ -873,26 +868,322 @@ func _on_character_chosen(id: String) -> void:
 
 ## A map card was picked. Same map: straight on to modes. Another map: the
 ## travel card, then reload onto it keeping the flyer.
-func _on_map_chosen(id: String) -> void:
+# ── Flow: home, PLAY, travel, tutorial, results ──────────────────────────────
+
+func _today() -> String:
+	return Time.get_date_string_from_system()
+
+
+## Home: the flyer on the roof, the home camera drifting, the home screen up.
+func _enter_home() -> void:
+	if not _character_picked:
+		_apply_flyer(_profile.flyer_id)
+	_home_on = true
+	_intro_active = true
+	_char_ui_shown = true
+	_flyer_picked = false
+	player.intro_lock = true
+	player.move_to_roof(city.spawn_position, city.rooftop_bounds)
+	player.look_yaw = 0.0
+	player.look_pitch = -0.06
+	kite.hand_pos = player.hand_position()
+	## The roof-mate steps out of the portrait; back for the fight.
+	if _terrace_mate:
+		_terrace_mate.visible = false
+	if _home_cam == null:
+		_home_cam = Camera3D.new()
+		_home_cam.name = "HomeCam"
+		_home_cam.near = 0.1
+		_home_cam.far = 2400.0
+		if player.camera and player.camera.environment:
+			_home_cam.environment = player.camera.environment
+		add_child(_home_cam)
+	## Glide in from wherever the view was.
+	var from := get_viewport().get_camera_3d()
+	if from and from != _home_cam:
+		_home_from = from.global_transform
+		_home_from_fov = from.fov
+		_home_t = 0.0
+	else:
+		_home_t = 1.0
+	_update_home_cam(0.0)
+	_home_cam.current = true
+	if hud:
+		hud.current_map_id = _map_id
+		hud.show_home(_profile.last_mode)
+
+
+## The home shot: a low three-quarter view of the flyer from the front,
+## their roof and the map's landmark behind them. It sways slowly.
+func _home_pose() -> Transform3D:
+	var base := city.spawn_position
+	var sway := Vector3(sin(_home_t * 0.21) * 0.35, sin(_home_t * 0.17) * 0.12, cos(_home_t * 0.13) * 0.2)
+	var eye := base + home_eye + sway
+	var at := base + home_at
+	var xf := Transform3D(Basis.IDENTITY, eye)
+	return xf.looking_at(at, Vector3.UP)
+
+
+var home_eye := Vector3(3.0, 1.15, -3.7)
+var home_at := Vector3(-0.6, 1.35, 2.0)
+var home_fov := 46.0
+const HOME_BLEND := 1.4
+
+
+func _update_home_cam(delta: float) -> void:
+	if _home_cam == null:
+		return
+	_home_t += delta
+	var want := _home_pose()
+	var u := clampf(_home_t / HOME_BLEND, 0.0, 1.0)
+	if u < 1.0:
+		var e := smoothstep(0.0, 1.0, u)
+		var q := _home_from.basis.get_rotation_quaternion().slerp(want.basis.get_rotation_quaternion(), e)
+		_home_cam.global_transform = Transform3D(Basis(q), _home_from.origin.lerp(want.origin, e))
+		_home_cam.fov = lerpf(_home_from_fov, home_fov, e)
+	else:
+		_home_cam.global_transform = want
+		_home_cam.fov = home_fov
+
+
+## Hand the view from whatever camera is live to the flyer's own camera,
+## gliding over dur seconds (the intro camera does the glide).
+func _blend_to_player(dur: float) -> void:
+	var from := get_viewport().get_camera_3d()
+	if _intro_cam == null:
+		_intro_cam = Camera3D.new()
+		_intro_cam.name = "IntroCam"
+		_intro_cam.near = 0.2
+		_intro_cam.far = 2400.0
+		if player.camera and player.camera.environment:
+			_intro_cam.environment = player.camera.environment
+		add_child(_intro_cam)
+	if from:
+		_intro_cam.global_transform = from.global_transform
+		_intro_cam_start_fov = from.fov
+	_intro_cam_start = _intro_cam.global_transform
+	_intro_cam_t = 0.0
+	_intro_cam_dur = dur
+	_intro_cam.current = true
+
+
+func _on_home_play() -> void:
+	_play(_profile.last_mode, _map_id)
+
+
+## Start a mode on a map: here and now, or after the trip there.
+func _play(mode: String, map_id: String) -> void:
+	_profile.last_mode = mode
+	_profile.last_map = map_id
+	_profile.save_to_disk()
+	if map_id != _map_id:
+		_travel_to(map_id, mode)
+		return
+	_start_mode(mode)
+
+
+func _start_mode(mode: String) -> void:
+	_home_on = false
+	if _terrace_mate:
+		_terrace_mate.visible = true
+	_blend_to_player(1.3)
+	player.intro_lock = false
+	_on_mode_chosen(mode)
+	if hud:
+		hud.show_ready(mode)
+
+
+## Home -> Maps -> a card: home moves onto that map.
+func _on_map_requested(id: String) -> void:
 	if not MapRegistry.has(id):
 		return
+	_profile.last_map = id
+	_profile.save_to_disk()
 	if id == _map_id:
-		hud.show_mode_select()
+		hud.show_home(_profile.last_mode)
 		return
+	_travel_to(id, "")
+
+
+## The travel card, then reload onto the map keeping the flyer. With a mode,
+## the fight starts on arrival; without, it lands home.
+func _travel_to(id: String, mode: String) -> void:
 	hud.show_travel(id)
 	var t := get_tree().create_timer(0.9)
 	t.timeout.connect(func() -> void:
 		Engine.set_meta("travel_map", id)
-		Engine.set_meta("travel_flyer", _flyer_id if _flyer_id != "" else "boy")
+		Engine.set_meta("travel_flyer", _profile.flyer_id)
+		if mode != "":
+			Engine.set_meta("travel_play", mode)
 		get_tree().paused = false
 		get_tree().reload_current_scene())
 
 
 func _land_after_travel(flyer: String) -> void:
-	_skip_intro_cam()
-	_finish_intro_cam()
-	hud.skip_map_step = true
-	hud._pick_character(flyer)
+	_profile.flyer_id = flyer
+	var mode := ""
+	if Engine.has_meta("travel_play"):
+		mode = str(Engine.get_meta("travel_play"))
+		Engine.remove_meta("travel_play")
+	if mode == "":
+		_skip_intro_cam()
+		return
+	## Straight into the fight PLAY asked for.
+	_intro_cam_t = 1.0
+	_update_intro_cam(0.0)
+	_char_ui_shown = true
+	if _title_kite and _title_kite.has_method("recede"):
+		_title_kite.recede()
+		_title_kite = null
+	_apply_flyer(flyer)
+	_start_mode(mode)
+
+
+## Home -> Flyer: the two flyers back on the terrace to choose between.
+func _on_flyer_requested() -> void:
+	_home_on = false
+	_blend_to_player(1.0)
+	_character_picked = false
+	player.clear_avatar()
+	if _terrace_mate:
+		_terrace_mate.queue_free()
+		_terrace_mate = null
+	_ensure_preview_people()
+	if hud:
+		hud.show_character_select(true)
+
+
+## Back to the home screen from anywhere: a fight, the tutorial, the pause
+## menu. The flyer stays; kites come down and the rival goes home.
+func _go_home() -> void:
+	get_tree().paused = false
+	_online = false
+	_net_live = false
+	_peer_card = {}
+	_peer_id = ""
+	_remote_state = {}
+	if _net and _net.has_method("hangup"):
+		_net.hangup()
+	_end_tutorial()
+	_flyer_picked = false
+	_game_mode = ""
+	_cam_chase = false
+	_match_cuts = 0
+	_match_paid = false
+	_save_dodges = 0
+	_save_paid = false
+	_kheench_held = false
+	_dheel_held = false
+	_launch_look = 0.0
+	if pech:
+		pech.net_mode = false
+		pech.player_wins = 0
+		pech.rival_wins = 0
+	if _rockets:
+		_rockets.enabled = false
+	_set_back_view(false)
+	if kite:
+		kite.set_kheench(false)
+		kite.set_dheel(false)
+		kite.park_on_roof()
+		kite.visible = false
+	if rival:
+		rival.is_ai = true
+		rival.hand_pos = city.rival_hand_position()
+		rival.park_on_roof()
+		rival.visible = false
+	var npc := get_node_or_null("RivalFlyer")
+	if npc:
+		npc.visible = true
+	if hud:
+		hud.hide_chrome()
+		hud.hide_vs()
+		hud.hide_net_lobby()
+		hud.result.close()
+		if hud.coach.visible:
+			hud.coach.close()
+	_enter_home()
+
+
+func _start_tutorial() -> void:
+	_tut_on = true
+	_tut_rival = false
+	_game_mode = "battle"
+	_flyer_picked = true
+	player.intro_lock = false
+	if _terrace_mate:
+		_terrace_mate.visible = true
+	if hud:
+		hud.game_mode = "battle"
+		hud.show_tutorial()
+	if _rockets:
+		_rockets.enabled = false
+	kite.fight_pips = false
+	rival.fight_pips = false
+	_match_cuts = 0
+	_match_paid = false
+	if pech:
+		pech.player_wins = 0
+		pech.rival_wins = 0
+	var fight_hand := _battle_hand()
+	rival.hand_pos = fight_hand
+	if _rival_ai:
+		_rival_ai.hand = fight_hand
+		_rival_ai.passive = true
+	rival.visible = false
+	_tutorial = TutorialSc.new()
+	_tutorial.name = "Tutorial"
+	add_child(_tutorial)
+	_tutorial.kite = kite
+	_tutorial.pech = pech
+	_tutorial.coach = hud.coach
+	_tutorial.rival_wanted.connect(func() -> void:
+		_tut_rival = true
+		rival.visible = true
+		rival.launch())
+	_tutorial.finished.connect(_on_tutorial_done)
+	_tutorial.start()
+
+
+func _on_tutorial_done() -> void:
+	_end_tutorial()
+	var res := _profile.award_tutorial()
+	_profile.last_map = _map_id
+	_profile.save_to_disk()
+	if hud:
+		hud.coach.close()
+		var who := _profile.display_name if _profile.display_name != "You" else "patangbaaz"
+		hud.show_result("FIRST CUT!", "Welcome to the roofs, %s. The sky is yours." % who, res, [["home", "Continue", true]])
+
+
+func _skip_tutorial() -> void:
+	_profile.onboarded = true
+	_profile.last_map = _map_id
+	_profile.save_to_disk()
+	_go_home()
+
+
+func _end_tutorial() -> void:
+	_tut_on = false
+	_tut_rival = false
+	if _rival_ai:
+		_rival_ai.passive = false
+	if _tutorial:
+		_tutorial.queue_free()
+		_tutorial = null
+
+
+func _on_result_action(id: String) -> void:
+	match id:
+		"rematch":
+			_reset_evening()
+		"again":
+			kite.relaunch()
+			_launch_look = 1.4
+			_save_paid = false
+			_save_dodges = 0
+		_:
+			_go_home()
 
 
 func _on_mode_chosen(id: String) -> void:
@@ -1104,6 +1395,10 @@ func _on_player_dodged() -> void:
 
 
 func _on_match_kaata(player_won: bool, _at: Vector3) -> void:
+	if _tut_on:
+		if _tutorial:
+			_tutorial.on_kaata(player_won)
+		return
 	if _online:
 		return
 	if _game_mode != "battle" or _match_paid:
@@ -1120,10 +1415,12 @@ func _payout_battle() -> void:
 	_match_paid = true
 	var won := pech != null and pech.player_wins >= 2
 	var result := _profile.award_battle(_match_cuts, won)
-	if hud:
-		hud.show_payout(result)
-	var t := get_tree().create_timer(4.0)
-	t.timeout.connect(_reset_evening)
+	var score := "%d  –  %d" % [pech.player_wins if pech else 0, pech.rival_wins if pech else 0]
+	var buttons: Array = [["home", "Home", true]] if _online else [["rematch", "Rematch", true], ["home", "Home", false]]
+	## Let the WO KAATA! land before the card comes up.
+	get_tree().create_timer(2.4).timeout.connect(func() -> void:
+		if hud and _game_mode == "battle":
+			hud.show_result("YOU WIN!" if won else "THEY WIN", score, result, buttons))
 
 
 func _reset_evening() -> void:
@@ -1141,8 +1438,10 @@ func _on_player_cut() -> void:
 	if _profile == null:
 		return
 	var result := _profile.award_save(_save_dodges)
-	if hud:
-		hud.show_payout(result)
+	var n := _save_dodges
+	get_tree().create_timer(1.8).timeout.connect(func() -> void:
+		if hud and _game_mode == "save":
+			hud.show_result("KITE DOWN", "You dodged %d rocket%s." % [n, "" if n == 1 else "s"], result, [["again", "Fly again", true], ["home", "Home", false]]))
 
 
 func _place_windsock() -> void:

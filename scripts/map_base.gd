@@ -11,6 +11,8 @@ var rooftop_bounds: Rect2 = Rect2(-6.5, 86.0, 13.0, 13.0)
 ## Boxes a kite crashes into, and the box of the flyer's own roof (which it
 ## may sit on). Maps with terrain override is_solid() as well.
 var building_aabbs: Array[AABB] = []
+## A night map: kite strings carry tukkal lanterns so kites show in the dark.
+var night: bool = false
 var player_building_aabb: AABB
 ## Where Diwali rockets launch from in Save mode.
 var rocket_pads: Array[Vector3] = []

@@ -46,7 +46,10 @@ func compound_base(rect: Rect2, top_y: float, drop: float, flare: float) -> void
 	var m := wall_mat(top_y)
 	var c := rect.get_center()
 	var size := rect.size
-	var base := frustum(size + Vector2(flare, flare) * 2.0, size, drop, Vector3(c.x, top_y - drop, c.y), m)
+	## Its top stops just under the deck: level with it, the two faces fought
+	## over every pixel and the floor flashed in jagged patches as the camera
+	## moved.
+	var base := frustum(size + Vector2(flare, flare) * 2.0, size, drop, Vector3(c.x, top_y - 0.05 - drop, c.y), m)
 	base.name = "CompoundBase"
 	## Whitewashed coping stone around the rim.
 	var cap := wall_mat(top_y + 2.0)

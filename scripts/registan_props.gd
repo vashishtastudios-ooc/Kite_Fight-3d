@@ -12,74 +12,38 @@ const SHADE := Color(0.52, 0.34, 0.26)
 const DOOR := Color(0.36, 0.20, 0.14)
 const TEAL := Color(0.20, 0.52, 0.52)
 const CAMEL_SCENE := preload("res://assets/desert/camel.glb")
+const FORT_ROCK_SCENE := preload("res://assets/desert/fort_rock.glb")
+const FORT_WALLS_SCENE := preload("res://assets/desert/fort_walls.glb")
+const KHEJRI_SCENE := preload("res://assets/desert/khejri.glb")
+const HAVELI_SCENE := preload("res://assets/map_art/flight_terrace.glb")
+## The model is built 22 m by 26 m in plan, with its roof deck 10 m up.
+const HAVELI_PLAN := Vector3(22.0, 10.0, 26.0)
 
 
 # ── Haveli ───────────────────────────────────────────────────────────────────
 
-## A merchant's house: sandstone walls from the shelf up to a flat roof, with
-## arched windows, carved brackets and jutting jharokha balconies. `hero` adds
-## the corner pavilions and a stair block — that is the roof you fly from.
-func haveli(roof: Rect2, ground_y: float, deck_y: float, hero: bool) -> Node3D:
-	var h := Node3D.new()
+## A merchant house (assets/desert/haveli.glb): battered sandstone walls,
+## arched windows, jaali screens, jharokha balconies, a bracketed cornice and
+## a parapet with corner pavilions. Scaled to the roof it has to fill, and
+## given a collision slab so the flyer can stand on it.
+func haveli(roof: Rect2, ground_y: float, deck_y: float, _hero: bool) -> Node3D:
+	var h := HAVELI_SCENE.instantiate() as Node3D
 	h.name = "Haveli"
 	root.add_child(h)
 	var c := roof.get_center()
 	h.position = Vector3(c.x, ground_y, c.y)
-	var w := roof.size.x
-	var d := roof.size.y
-	var tall := deck_y - ground_y
-	## Walls, a plinth, and a string course under the roof.
-	frustum(Vector2(w + 1.2, d + 1.2), Vector2(w + 0.6, d + 0.6), 1.0, Vector3.ZERO, mat(SAND_DEEP), h)
-	frustum(Vector2(w, d), Vector2(w - 0.5, d - 0.5), tall, Vector3(0.0, 1.0, 0.0), mat(SAND), h)
-	box(Vector3(w + 0.5, 0.35, d + 0.5), Vector3(0.0, tall - 0.4, 0.0), mat(CARVE), 0.0, h)
-	## Roof slab you stand on, with collision.
-	var deck := box(Vector3(w + 0.8, 0.7, d + 0.8), Vector3(0.0, tall + 0.35, 0.0), mat(SAND_LIT), 0.0, h)
+	h.scale = Vector3(roof.size.x / HAVELI_PLAN.x, (deck_y - ground_y) / HAVELI_PLAN.y, roof.size.y / HAVELI_PLAN.z)
+	## Keep the Blender stone, brass and copper palette, with the front of
+	## the terrace open so the player can see the dunes and their kite.
+	## The roof slab you stand on.
 	var body := StaticBody3D.new()
 	var cs := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(w + 0.8, 0.7, d + 0.8)
+	shape.size = Vector3(roof.size.x, 1.0, roof.size.y)
 	cs.shape = shape
+	cs.position = Vector3(c.x, deck_y - 0.5, c.y)
 	body.add_child(cs)
-	deck.add_child(body)
-	## Parapet with stepped merlons round the roof.
-	_parapet(h, w + 0.8, d + 0.8, tall + 0.7)
-	## Arched windows on all four walls, a few lamp-lit.
-	var rows := int((tall - 2.0) / 3.2)
-	for row in maxi(rows, 1):
-		var y := 2.2 + float(row) * 3.2
-		for side in 4:
-			var along := w if side % 2 == 0 else d
-			var n := maxi(int(along / 4.0), 1)
-			for i in n:
-				var t := (float(i) + 0.5) / float(n)
-				var p := Vector3.ZERO
-				var nrm := Vector3.ZERO
-				match side:
-					0:
-						p = Vector3(lerpf(-w * 0.42, w * 0.42, t), y, -d * 0.5)
-						nrm = Vector3(0, 0, -1)
-					1:
-						p = Vector3(w * 0.5, y, lerpf(-d * 0.42, d * 0.42, t))
-						nrm = Vector3(1, 0, 0)
-					2:
-						p = Vector3(lerpf(-w * 0.42, w * 0.42, t), y, d * 0.5)
-						nrm = Vector3(0, 0, 1)
-					_:
-						p = Vector3(-w * 0.5, y, lerpf(-d * 0.42, d * 0.42, t))
-						nrm = Vector3(-1, 0, 0)
-				arch_window(p, nrm, 1.0, 1.7, (i + row + side) % 3 == 0, h)
-	## Jharokha balconies on the front, one per upper window.
-	if tall > 5.0:
-		for i in 2:
-			var x := lerpf(-w * 0.26, w * 0.26, float(i))
-			jharokha(Vector3(x, tall - 3.4, -d * 0.5), Vector3(0, 0, -1), h)
-	if hero:
-		## Corner pavilions and the stair house up to the roof.
-		for sx in [-1.0, 1.0]:
-			chhatri(Vector3(c.x + sx * (w * 0.5 - 1.6), deck_y + 0.7, c.y + d * 0.5 - 1.6), 0.62)
-		box(Vector3(4.0, 2.6, 3.4), Vector3(w * 0.5 - 3.0, tall + 2.0, d * 0.5 - 2.4), mat(SAND_LIT), 0.0, h)
-		box(Vector3(4.4, 0.3, 3.8), Vector3(w * 0.5 - 3.0, tall + 3.4, d * 0.5 - 2.4), mat(CARVE), 0.0, h)
-		arch_window(Vector3(w * 0.5 - 3.0, tall + 2.0, d * 0.5 - 4.32), Vector3(0, 0, -1), 1.0, 1.6, false, h)
+	root.add_child(body)
 	return h
 
 
@@ -369,57 +333,27 @@ func town_wall(area: Rect2, ground_y: float, map: Node) -> void:
 
 # ── Fort ─────────────────────────────────────────────────────────────────────
 
-## Jaisalmer-style: a ring of round bastions joined by battered curtain wall,
-## with a gate tower and a huddle of buildings inside.
+## The modelled fort (assets/desert/fort_*.glb): a weathered crag carrying a
+## battlemented wall, round bastions, an arched gate and a palace. Both parts
+## are built with their top at y = 0, so they drop straight onto the plateau.
 func fort(top_center: Vector3, half: Vector2) -> Node3D:
 	var f := Node3D.new()
 	f.name = "Fort"
 	root.add_child(f)
 	f.position = top_center
-	var m := mat(SAND)
-	var lit := mat(SAND_LIT)
-	var n := 16
-	for i in n:
-		var a := TAU * float(i) / float(n)
-		var p := Vector3(cos(a) * half.x, 0.0, sin(a) * half.y)
-		## Bastion: a fat tapering drum with a battlemented top.
-		var r := 6.5 if i % 2 == 0 else 5.0
-		cyl(r, r * 0.8, 24.0, p + Vector3(0.0, 12.0, 0.0), m, 12, f)
-		cyl(r * 0.95, r * 0.95, 1.4, p + Vector3(0.0, 24.7, 0.0), lit, 12, f)
-		for k in 9:
-			var aa := TAU * float(k) / 9.0
-			box(Vector3(1.2, 1.4, 1.2), p + Vector3(cos(aa) * r * 0.86, 26.0, sin(aa) * r * 0.86), lit, aa, f)
-		## Curtain wall to the next bastion.
-		var a2 := TAU * float(i + 1) / float(n)
-		var q := Vector3(cos(a2) * half.x, 0.0, sin(a2) * half.y)
-		var mid := (p + q) * 0.5
-		var seg := q - p
-		var wall := frustum(Vector2(seg.length(), 5.5), Vector2(seg.length(), 4.0), 19.0, mid, m, f)
-		wall.rotation.y = atan2(seg.x, seg.z) + PI * 0.5
-		var cap := box(Vector3(seg.length(), 0.9, 4.6), mid + Vector3(0.0, 19.4, 0.0), lit, atan2(seg.x, seg.z) + PI * 0.5, f)
-		cap.name = "WallCap"
-	## Inside: a cluster of flat-roofed blocks and two chhatris.
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 909
-	for i in 12:
-		var p := Vector3(rng.randf_range(-half.x * 0.7, half.x * 0.7), 0.0, rng.randf_range(-half.y * 0.7, half.y * 0.7))
-		var w := rng.randf_range(8.0, 16.0)
-		var d := rng.randf_range(8.0, 14.0)
-		var tall := rng.randf_range(14.0, 30.0)
-		frustum(Vector2(w, d), Vector2(w - 0.6, d - 0.6), tall, p, mat(SAND if i % 2 == 0 else SAND_DEEP), f)
-		box(Vector3(w + 0.5, 0.6, d + 0.5), p + Vector3(0.0, tall + 0.3, 0.0), lit, 0.0, f)
-		if i % 4 == 0:
-			var dm := sphere(w * 0.32, w * 0.42, p + Vector3(0.0, tall + 1.0, 0.0), lit, f)
-			dm.scale = Vector3(1.0, 0.85, 1.0)
-	## Gate tower facing the town.
-	var gate := Vector3(half.x * 0.2, 0.0, -half.y - 1.0)
-	frustum(Vector2(14.0, 8.0), Vector2(12.0, 7.0), 20.0, gate, m, f)
-	box(Vector3(15.0, 1.0, 9.0), gate + Vector3(0.0, 20.2, 0.0), lit, 0.0, f)
-	arch_window(gate + Vector3(0.0, 5.0, -4.1), Vector3(0, 0, -1), 4.0, 7.0, false, f)
-	## Palace chhatris breaking the skyline.
-	for sx in [-0.45, 0.0, 0.45]:
-		chhatri(top_center + Vector3(sx * half.x, 26.0, -half.y * 0.25), 1.15)
+	## The terrain already forms the crag. A second rock shell intersects it
+	## and produces hard floating-looking patches on the slopes.
+	var walls := FORT_WALLS_SCENE.instantiate() as Node3D
+	f.add_child(walls)
+	walls.scale.y = 0.62
+	_paint(walls, mat(SAND))
 	return f
+
+
+## Give every mesh under a node the same flat material.
+func _paint(n: Node, m: Material) -> void:
+	for mi in n.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).material_override = m
 
 
 # ── Stepwell, caravan, trees, dust devils ────────────────────────────────────
@@ -560,22 +494,19 @@ func walk_caravan(train: Dictionary, map: Node, delta: float, speed: float = 1.6
 			k += 1
 
 
-## Khejri: thin trunk, flat spreading crown — the tree of the Thar.
+## Khejri (assets/desert/khejri.glb): crooked trunk, forking limbs and the
+## broad flat crown of the Thar. Painted flat so it reads as a silhouette.
 func khejri(feet: Vector3, rng: RandomNumberGenerator) -> void:
-	var t := Node3D.new()
+	var t := KHEJRI_SCENE.instantiate() as Node3D
 	t.name = "Khejri"
 	root.add_child(t)
 	t.position = feet
 	t.rotation.y = rng.randf() * TAU
-	var bark := mat(Color(0.36, 0.26, 0.18))
-	var leaf := mat(Color(0.30, 0.34, 0.20))
-	var tall := rng.randf_range(2.6, 4.4)
-	cyl(0.22, 0.14, tall, Vector3(0.0, tall * 0.5, 0.0), bark, 6, t)
-	for i in 3:
-		var a := TAU * float(i) / 3.0 + rng.randf()
-		var r := rng.randf_range(1.2, 2.2)
-		var crown := sphere(r, r * 0.7, Vector3(cos(a) * r * 0.5, tall + rng.randf_range(0.0, 0.5), sin(a) * r * 0.5), leaf, t)
-		crown.scale = Vector3(1.2, 0.5, 1.2)
+	var s := rng.randf_range(0.8, 1.45)
+	t.scale = Vector3(s, s * rng.randf_range(0.9, 1.15), s)
+	_paint(t, mat(Color(0.16, 0.08, 0.07)))
+	for mi in t.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 ## A dust devil: a twisting column of sand, thin at the foot and flaring out

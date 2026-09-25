@@ -4,8 +4,8 @@ shader_type spatial;
 // and faint wind ripples running across the slopes.
 render_mode diffuse_toon, specular_disabled;
 
-uniform vec3 lit_col : source_color = vec3(0.95, 0.58, 0.28);
-uniform vec3 shade_col : source_color = vec3(0.30, 0.13, 0.14);
+uniform vec3 lit_col : source_color = vec3(0.82, 0.57, 0.36);
+uniform vec3 shade_col : source_color = vec3(0.34, 0.20, 0.21);
 uniform vec3 crest_col : source_color = vec3(1.0, 0.86, 0.52);
 uniform vec3 hollow_col : source_color = vec3(0.20, 0.09, 0.11);
 uniform float hollow_y = 6.0;      // sand below this sits in shadowed hollows

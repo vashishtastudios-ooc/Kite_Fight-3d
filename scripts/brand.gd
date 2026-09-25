@@ -1,7 +1,8 @@
 extends RefCounted
 
-const TITLE := "KITE BATTLE 3D"
-const TAGLINE := "Patangbaaz"
+const TITLE := "PATANG"
+const STORE_TITLE := "Patang: Kite Fighting"
+const TAGLINE := "A rooftop kite fight"
 const SUBTITLE := "Rooftop kite fight"
 
 const GOLD := Color(1.0, 0.84, 0.38)

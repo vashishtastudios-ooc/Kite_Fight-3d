@@ -25,6 +25,9 @@ var kite: KiteSc
 var target: KiteSc
 var pech: PechSc
 var hand: Vector3 = Vector3.ZERO
+## Tutorial rival: climbs and drifts across your string, but never darts or
+## ducks, so a first-timer's swipe always wins.
+var passive: bool = false
 
 var _respawn: float = 0.0
 var _yank: float = 0.0
@@ -90,7 +93,7 @@ func _plan() -> void:
 	_dheel = false
 	_kheench = false
 	var alt := kite.altitude()
-	if alt >= 14.0 and _react_to_attack():
+	if alt >= 14.0 and not passive and _react_to_attack():
 		return
 
 	_goal = _sweep_goal()
@@ -139,6 +142,8 @@ func _plan() -> void:
 		_swing_t = randf_range(SWEEP_SWING.x, SWEEP_SWING.y) * (0.55 if eager else 1.0)
 	## Flick the nose onto the line to the goal, then dart along it.
 	kite.steer_nose(aim)
+	if passive:
+		return
 	if align > (0.6 if eager else 0.8):
 		_yank = maxf(_yank, 0.6 if eager else 0.5)
 

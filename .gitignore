@@ -1,5 +1,7 @@
 # Godot 4
 .godot/
+.tools/
+art_previews/
 *.translation
 
 # OS

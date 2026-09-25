@@ -24,6 +24,8 @@ const COIN_CUT := 15
 const COIN_WIN := 40
 const XP_DODGE := 8
 const COIN_DODGE := 5
+const XP_TUTORIAL := 50
+const COIN_TUTORIAL := 100
 
 var display_name: String = "You"
 var flyer_id: String = "boy"
@@ -36,6 +38,12 @@ var owned: PackedStringArray = PackedStringArray([KiteSkins.SAFFRON])
 var battles_won: int = 0
 var battles_lost: int = 0
 var cuts: int = 0
+## The flow: has the first-launch tutorial been flown, what PLAY repeats, and
+## the day the title flyover last played (it plays once a day at most).
+var onboarded: bool = false
+var last_mode: String = "battle"
+var last_map: String = ""
+var last_flyover: String = ""
 var cloud_push: Callable
 
 
@@ -60,6 +68,13 @@ func load_from_disk() -> void:
 	battles_won = maxi(0, int(cfg.get_value("rec", "won", 0)))
 	battles_lost = maxi(0, int(cfg.get_value("rec", "lost", 0)))
 	cuts = maxi(0, int(cfg.get_value("rec", "cuts", 0)))
+	## Anyone who has already fought has no need of the tutorial.
+	onboarded = bool(cfg.get_value("flow", "onboarded", battles_won + battles_lost > 0))
+	last_mode = str(cfg.get_value("flow", "mode", "battle"))
+	if last_mode != "save" and last_mode != "online":
+		last_mode = "battle"
+	last_map = str(cfg.get_value("flow", "map", ""))
+	last_flyover = str(cfg.get_value("flow", "flyover", ""))
 	owned = PackedStringArray([KiteSkins.SAFFRON])
 	var raw := str(cfg.get_value("shop", "owned", KiteSkins.SAFFRON)).split(",", false)
 	for id in raw:
@@ -134,6 +149,10 @@ func save_to_disk() -> void:
 	cfg.set_value("rec", "lost", battles_lost)
 	cfg.set_value("rec", "cuts", cuts)
 	cfg.set_value("shop", "owned", ",".join(owned))
+	cfg.set_value("flow", "onboarded", onboarded)
+	cfg.set_value("flow", "mode", last_mode)
+	cfg.set_value("flow", "map", last_map)
+	cfg.set_value("flow", "flyover", last_flyover)
 	cfg.save(PATH)
 	if cloud_push.is_valid():
 		cloud_push.call()
@@ -221,6 +240,15 @@ func award_save(dodge_count: int) -> Dictionary:
 	var result := _apply(XP_FINISH + n * XP_DODGE, COIN_FINISH + n * COIN_DODGE)
 	result["dodges"] = n
 	result["kind"] = "save"
+	return result
+
+
+## The first cut in the tutorial: a welcome purse.
+func award_tutorial() -> Dictionary:
+	onboarded = true
+	cuts += 1
+	var result := _apply(XP_TUTORIAL, COIN_TUTORIAL)
+	result["kind"] = "tutorial"
 	return result
 
 
